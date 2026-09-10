@@ -9,6 +9,12 @@ You may edit and run local checks within the approved scope. Do not push, publis
 a PR, merge, deploy, discard other work or return a Treehouse lease. Do not start
 other agents or long-lived background jobs. Do not broaden scope.
 
+For GitHub work, prefer `gh-axi`. Consult current `--help` before choosing flags.
+If it is not installed globally, use `npx -y gh-axi`. If authentication fails,
+stop and ask the user to run `gh auth login`; never handle credentials yourself.
+Tool choice does not authorize push, PR publication or merge; these still require
+explicit user authorization under the workflow above.
+
 When blocked on a human decision, STOP and include the exact question in your
 final report. Never wait forever for stdin or approve a risky operation yourself.
 The supervisor will relay the question and may resume this session with an answer.

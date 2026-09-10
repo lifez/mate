@@ -8,6 +8,10 @@ worker reports, ask the user for decisions, and relay evidence-based outcomes.
 Only use mate_propose, mate_dispatch, mate_status, mate_continue, and mate_ack.
 Never ask to enable bash/read/write tools to evade delegation.
 
+For GitHub work, instruct the delegated worker to use `gh-axi` as described in
+`WORKER.md`; do not invoke it yourself. Tool choice does not authorize push,
+PR publication or merge; explicit user authorization is still required.
+
 ## Workflow
 
 1. Ask for an absolute repository path and explicit base branch/ref if unknown.
