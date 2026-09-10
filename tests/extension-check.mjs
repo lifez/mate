@@ -1,7 +1,7 @@
 // Real Python control plane + mocked Pi UI/model. No model calls or live workers.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -51,6 +51,36 @@ async function wait(check) {
 }
 const call = async (name, params = {}) => JSON.parse((await tools[name].execute('test', params)).content[0].text);
 try {
+  const { default: bridge } = await jiti.import(join(root, 'bin/worker-events.ts'));
+  const bridgeHandlers = {}, bridgeFile = join(tmp, 'bridge.jsonl');
+  const fd = openSync(bridgeFile, 'w', 0o600);
+  const priorDescriptor = process.env.MATE_EVENT_FD;
+  let shutdowns = 0, aborted = false, idle = false, queued = false;
+  const bridgeCtx = { ui: { notify() {} }, isIdle: () => idle, hasPendingMessages: () => queued,
+    shutdown: () => { shutdowns++; }, abort: () => { aborted = true; } };
+  try {
+    process.env.MATE_EVENT_FD = String(fd);
+    bridge({ on: (name, handler) => { bridgeHandlers[name] = handler; } });
+    assert.equal(bridgeHandlers.agent_end, undefined, 'do not terminate retries at low-level agent_end');
+    bridgeHandlers.agent_settled({ type: 'agent_settled' }, bridgeCtx);
+    assert.equal(shutdowns, 0, 'ignore unsettled agent');
+    idle = true; queued = true;
+    bridgeHandlers.agent_settled({ type: 'agent_settled' }, bridgeCtx);
+    assert.equal(shutdowns, 0, 'queued messages must run first');
+    queued = false;
+    bridgeHandlers.message_end({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, bridgeCtx);
+    bridgeHandlers.agent_settled({ type: 'agent_settled' }, bridgeCtx);
+    assert.equal(shutdowns, 1);
+    assert.equal(JSON.parse(readFileSync(bridgeFile, 'utf8').trim().split('\n').at(-1)).type, 'agent_settled');
+    bridgeHandlers.message_update({ text: 'x'.repeat(4 * 1024 * 1024) }, bridgeCtx);
+    assert.equal(aborted, true, 'bridge failure must abort instead of silently losing reports');
+    assert.equal(process.exitCode, 1);
+    process.exitCode = 0;
+  } finally {
+    closeSync(fd);
+    if (priorDescriptor === undefined) delete process.env.MATE_EVENT_FD;
+    else process.env.MATE_EVENT_FD = priorDescriptor;
+  }
   assert.deepEqual(workerProfile(ctx, {}), { provider: 'openai-codex', model: 'main-model', effort: 'high' });
   assert.deepEqual(workerProfile(ctx, { model: 'worker-model', effort: 'xhigh' }), { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
   assert.deepEqual(workerProfile(ctx, { effort: 'low' }), { provider: 'openai-codex', model: 'main-model', effort: 'low' });
@@ -182,6 +212,27 @@ try {
   assert.equal(messages.at(-1).message.details.events[0].kind, 'test');
   await call('mate_ack', { events: [1], note: 'Relayed fixture outcome' });
   assert.equal((await call('mate_status')).events.length, 0);
+  assert.equal(tools.mate_complete, undefined, 'completion is not a model tool');
+  assert.equal(handlers.tool_call({ toolName: 'mate_complete' }).block, true);
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.equal((await call('mate_status')).tasks[0].state, 'approved', 'cannot complete before review');
+  execFileSync('python3', ['-c', `import sqlite3,os,json\np=os.environ['MATE_HOME']\nc=sqlite3.connect(os.path.join(p,'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(state='review',attempt=1)\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()\nos.makedirs(os.path.join(p,'inspect'),exist_ok=True)`]);
+  await commands['mate-complete'].handler('inspect', { ...ctx, mode: 'rpc' });
+  assert.equal((await call('mate_status')).tasks[0].state, 'review', 'TUI only');
+  approval = false;
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.equal((await call('mate_status')).tasks[0].state, 'review', 'decline preserves review');
+  approval = true;
+  await commands['mate-complete'].handler('inspect', ctx);
+  const completed = (await call('mate_status')).tasks[0];
+  assert.equal(completed.state, 'complete');
+  assert.ok(completed.completed_by);
+  const completionMessage = messages.find(m => m.message.customType === 'mate-completed');
+  assert.equal(completionMessage.message.display, true);
+  assert.equal(completionMessage.options.triggerTurn, false);
+  assert.equal(renderers['mate-completed'], undefined, 'Calm must not hide human acceptance');
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.equal(messages.filter(m => m.message.customType === 'mate-completed').length, 1);
   await handlers.session_shutdown();
   const stopped = messages.length;
   await sleep(2100);

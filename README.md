@@ -35,8 +35,18 @@ Run `/mate-approve TASK_ID` and review the scope, repository, branch and full SH
 in the confirmation dialog. Declining creates no lease/pane/worker. Accepting
 wakes the supervisor so it can dispatch the approved task.
 
-The worker runs pi in a dedicated Herdr tab and a Treehouse-leased worktree.
-When it stops, its report is stored on disk and the supervisor wakes automatically.
+The worker runs **native interactive pi TUI** in a dedicated Herdr tab and a
+Treehouse-leased worktree. You can see Pi's tool calls, output and response as they
+happen; use Pi's normal expansion/thinking visibility controls. Mate Calm affects
+only the supervisor, not the worker UI.
+
+A small explicit `bin/worker-events.ts` extension sends lifecycle events through a
+separate pipe, leaving stdin/stdout attached to the terminal. After Pi fully settles
+(including automatic retries, compaction and queued follow-ups), the worker requests
+a graceful Pi exit. Its report is stored on disk and the supervisor wakes automatically.
+The Herdr tab and regular-TUI transcript remain; `mate_continue` reopens the same
+saved Pi session. This is one delegated run per attempt, not a permanently idle Pi.
+Quitting before the settled event is a failure, not inferred completion.
 A successful process exit becomes **review**, never automatic task completion.
 Code verification/research/review must themselves be delegated.
 
@@ -44,6 +54,7 @@ Code verification/research/review must themselves be delegated.
 
 - `/mate-approve ID` — human-only scope/base approval; no implicit push/merge/deploy approval.
 - `/mate-status` — show tasks/events without invoking a model.
+- `/mate-complete ID` — human confirmation that a stopped `review` task is accepted as complete.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
@@ -59,6 +70,23 @@ and pi session, for the same approved scope. It does not reset or reacquire it.
 Human answers to blockers go through the supervisor. Arbitrary live-pane steering
 is intentionally not exposed: inspect a live blocked worker yourself in Herdr
 rather than letting the supervisor blindly approve prompts.
+
+## Accepting a completed task
+
+After reviewing the report and any required verification, run `/mate-complete ID`.
+The TUI shows the task scope, base and attempt for your confirmation. Declining
+changes nothing. Acceptance requires state `review` and a released worker lock;
+a changed attempt, active worker, failed or uncertain task cannot be completed.
+
+`complete` records your acceptance—not automatic proof of correctness. Status
+includes `completed_at` (Unix time), `completed_by` (the local OS account running
+Mate, not an authenticated GitHub/person identity), and `completed_via`.
+Repeating the command preserves the original record. It is a human command, not
+a model tool; no model call is needed to accept a task.
+
+Completion does not acknowledge pending events, push/merge, release the Treehouse
+lease, close the Herdr tab or delete reports. Completed tasks remain visible in
+status and cannot continue or reopen in this version; propose a new task if needed.
 
 ## Calm mode
 
@@ -147,8 +175,10 @@ pi `models.json` configuration available to both supervisor and worker.
   changes, not filesystem/network permissions. The worker no-push/no-deploy rules
   are instructions, not an OS-enforced security boundary. Approve only repositories
   and briefs you trust; Treehouse may run repository setup hooks.
-- Project extensions/skills are disabled in the first worker version; project
-  context instructions still load. Custom provider extensions are not supported.
+- Worker extension discovery/skills remain disabled; only the explicit Mate event
+  bridge loads. Project context instructions still load. Custom provider extensions
+  are not supported. Do not switch/fork sessions in a running delegated worker;
+  send follow-up scope through the supervisor.
 - A hard crash during lease/pane creation is **attention**, not an invitation to
   retry. The journal and any lease receipt are retained. No automatic re-acquire,
   process killing, or destructive rollback attempts to guess what happened.
@@ -196,7 +226,7 @@ data/mate.sqlite3                  task journal + events + handling notes
 data/supervisor.lock               kernel-held ownership lock
 data/calm                          persistent Calm presentation preference
 data/<id>/session.jsonl            worker pi session (reused on continuation)
-data/<id>/events-<attempt>.jsonl    raw pi event log
+data/<id>/events-<attempt>.jsonl    selected Pi lifecycle/message/tool events
 data/<id>/stderr-<attempt>.log      provider/CLI errors
 data/<id>/report-<attempt>.txt      retained worker outcome
 data/<id>/run.lock                 live wrapper ownership
@@ -217,6 +247,8 @@ Treehouse 2.1.1. No extra runtime package installation is needed.
 ```sh
 python3 -m unittest discover -s tests -v
 node tests/extension-check.mjs
+# Real Pi TUI in a PTY; localhost fake model, no subscription/API credentials.
+python3 tests/tui-smoke.py
 # Opt-in: run inside Herdr; owns a unique test server and disposable repo/pool.
 python3 tests/live-smoke.py
 ```
@@ -226,6 +258,11 @@ mock Pi UI, including Calm toggling, persistence, fail-open visibility and uncha
 message payloads. It is not a visual terminal test. The live smoke uses real Herdr/Treehouse but **fake pi**, so it consumes
 no subscription quota. It deletes only its own successful fixture and stops only
 its own named test server; failed fixtures are retained for inspection.
+
+The TUI smoke runs the real Python worker and real Pi in a pseudo-terminal against
+a localhost fake model. It checks native tool/report rendering, separate event
+transport, settled shutdown, durable report and pending wake event. It uses a fixture
+lease checker; the Herdr/Treehouse integration is covered by the separate live smoke.
 
 These checks do **not** prove a real OpenAI model follows the workflow. The first
 real task should be a small read-only investigation with explicit base approval.

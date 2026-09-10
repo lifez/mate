@@ -16,11 +16,16 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - SQLite journal/events, worker reports, acknowledgement และ restart replay
 - Pi-owned control plane พร้อม Herdr native event helper และ 2s durable-result polling
 - Two-worker limit, stopped-worker continuation, stalled alerts และ fail-closed recovery
+- Mate-owned `/mate-complete ID`: human confirmation จาก review → complete เท่านั้น,
+  ตรวจ exact attempt + worker lock, บันทึกเวลา/OS account; ไม่ ack/cleanup/merge และไม่มี reopen
+  (ไม่มี upstream import เพิ่ม; tests ตรวจ gate/idempotency/persistence และ UI deny/accept)
 - Mate-owned change: per-task model/effort overrides ใน dispatch/continue; validate ผ่าน Pi catalog/capabilities,
   persist resolved profile และส่ง effort เป็น `--thinking` โดยไม่เปลี่ยน supervisor model หรือ approved base
 - Mate-owned config: `mate.config.json` กำหนด worker model/effort default แยกจากตัวหลัก;
   อ่านทุก new dispatch, task override มาก่อน config, continue เก็บ profile เดิม
   (ไม่ import upstream เพิ่ม; tests ตรวจ config validation/precedence/reload)
+- Worker ใช้ native pi TUI + Mate-owned event bridge ผ่าน pipe แยก; จบ attempt
+  เมื่อ `agent_settled` แล้ว graceful exit, เก็บ report/wake เหมือนเดิม
 - ยังไม่ทำ automatic cleanup, PR/merge/deploy, remote, multi-harness หรือ supervisor ย่อย
 - Ambiguous launch/crash เก็บสถานะ attention ให้ตรวจ ไม่เสี่ยง auto-relaunch
 - ผ่าน local checks และ real Herdr/Treehouse smoke ด้วย fake pi; **ยังไม่ได้ทดสอบกับโมเดล OpenAI จริง**
@@ -94,6 +99,14 @@ hash เปลี่ยนไม่ได้หมายถึง upstream เ�
 - **ไม่รับ default-branch refresh/reset behavior** เพราะขัดกับการยืนยันฐานของเรา
 - ไม่แก้ shared Treehouse config ต่อ task ไม่ reset --hard และเก็บ pooled branch/commits ไว้
 - Journal ก่อน acquire; ambiguous outcome ไม่ acquire ซ้ำ/return/rollback แบบเดา
+- Local launch update: อ่าน `launch_template` ของ source pinned เดิมเพิ่มเติมเพื่อยืนยัน
+  Firstmate เรียก pi interactive + explicit extension ไม่ใช่ print/JSON stdout
+- ของเราใช้ `--tui-mode regular` และ `bin/worker-events.ts` ที่เขียนเอง ส่ง event ผ่าน
+  inherited pipe โดยไม่ดัก stdin/stdout; exit เมื่อ `agent_settled` ไม่ใช่ `agent_end`
+- ต่างจาก persistent Firstmate worker: หนึ่ง attempt จบแล้ว Pi exit แต่ tab/transcript อยู่;
+  continue เปิด saved session เดิมใหม่ ไม่สร้าง lease ซ้ำ ไม่ copy Firstmate turn-end extension
+- Tests เพิ่ม: real Python worker + real Pi TUI ใน PTY / localhost fake model
+  (`tests/tui-smoke.py`), bridge lifecycle, missing-settled และ forced-kill fail-closed
 - Tests: deny approval, moving ref, exact SHA, unchanged original checkout, lease identity,
   idempotency และ real Treehouse fixture
 

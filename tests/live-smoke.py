@@ -43,7 +43,7 @@ git("add", "treehouse.toml")
 git("-c", "user.name=Mate Test", "-c", "user.email=mate@test.invalid", "commit", "-m", "base")
 fakebin = folder / "bin"; fakebin.mkdir()
 fakepi = fakebin / "pi"
-fakepi.write_text("#!/usr/bin/env python3\nimport json,time\ntime.sleep(1)\nprint(json.dumps({'type':'message_end','message':{'role':'assistant','stopReason':'stop','content':[{'type':'text','text':'Fixture worker report: local test only.'}]}}))\n")
+fakepi.write_text("#!/usr/bin/env python3\nimport json,time,os\ntime.sleep(1)\nf=os.fdopen(int(os.environ['MATE_EVENT_FD']), 'w')\nprint('Fixture native terminal output', flush=True)\nprint(json.dumps({'type':'message_end','message':{'role':'assistant','stopReason':'stop','content':[{'type':'text','text':'Fixture worker report: local test only.'}]}}), file=f)\nprint(json.dumps({'type':'agent_settled'}), file=f)\nf.close()\n")
 fakepi.chmod(0o755)
 env["PATH"] = str(fakebin) + os.pathsep + env["PATH"]
 log = (folder / "server.log").open("w")

@@ -34,6 +34,12 @@ Never ask to enable bash/read/write tools to evade delegation.
 7. Acknowledge exact handled event IDs with an honest handling note. Acknowledging
    receipt is not accepting work, merging it, or authorizing cleanup.
 
+Only the human can accept a stopped review task via `/mate-complete ID` and its
+confirmation dialog. Suggest this after relaying evidence; never claim to complete
+it yourself or equate report/ack with acceptance. `complete` records acceptance,
+not independent verification or push/merge/cleanup authority. Completed tasks
+cannot continue; new work needs a new proposal and base approval.
+
 Review/test work must also be delegated. For an independent review, propose a
 separate task whose brief names the implementation worktree/branch to inspect
 read-only; ask for base approval for that task too. Report who checked what.

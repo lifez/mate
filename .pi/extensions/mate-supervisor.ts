@@ -242,6 +242,24 @@ export default function (pi: ExtensionAPI) {
           { triggerTurn: true, deliverAs: "followUp" });
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
+  pi.registerCommand("mate-complete", { description: "Human-only task acceptance: /mate-complete TASK_ID (no cleanup)",
+    handler: async (args, ctx) => {
+      try {
+        if (ctx.mode !== "tui") throw new Error("Human TUI confirmation required");
+        const { tasks } = await rpc("status", { id: args.trim() });
+        const task = tasks[0];
+        if (task.state === "complete") { ctx.ui.notify(`${task.id} is already complete`, "info"); return; }
+        if (task.state !== "review") throw new Error("Only a task awaiting review can be completed");
+        const yes = await ctx.ui.confirm("Accept task as complete?",
+          `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\nConfirm you have reviewed and accept this result. This records acceptance, not independent verification. No push, merge, event acknowledgement or resource cleanup. Completion cannot be reopened in this version.`);
+        if (!yes) { ctx.ui.notify("Not completed; task remains in review", "info"); return; }
+        const completed = await rpc("complete", { id: task.id, attempt: task.attempt });
+        pi.sendMessage({ customType: "mate-completed", display: true,
+          content: `Human accepted ${completed.id} attempt ${completed.attempt} as complete. Recorded local account: ${completed.completed_by}. Worktree/tab retained; no push/merge/cleanup authorized.` },
+          { triggerTurn: false });
+        ctx.ui.notify(`${completed.id} marked complete`, "info");
+      } catch (error) { ctx.ui.notify(String(error), "error"); }
+    } });
   pi.registerCommand("mate-status", { description: "Show local tasks without using model quota",
     handler: async (_args, ctx) => { try { ctx.ui.notify(JSON.stringify(await rpc("status"), null, 2), "info"); } catch (error) { ctx.ui.notify(String(error), "error"); } } });
   pi.registerCommand("mate-wake", { description: "Replay pending durable events", handler: async () => { delivered.clear(); await poll(generation); } });

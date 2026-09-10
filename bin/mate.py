@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import pwd
 import selectors
 import shlex
 import shutil
@@ -278,6 +279,27 @@ def resume(db, p):
     return task
 
 
+def complete(db, p):
+    task = load(db, p["id"])
+    if task["state"] == "complete":
+        return task  # Repeated confirmation does not rewrite the acceptance record.
+    if task["state"] != "review" or type(p.get("attempt")) is not int or p["attempt"] != task["attempt"]:
+        raise ValueError("Only the reviewed attempt shown in the confirmation can be completed")
+    try:
+        guard = lock(HOME / task["id"] / "run.lock")
+    except BlockingIOError:
+        raise ValueError("Worker is still active; wait before completing the task") from None
+    try:
+        with db:
+            task.update(state="complete", completed_at=time.time(),
+                        completed_by=pwd.getpwuid(os.getuid()).pw_name,
+                        completed_via="mate-complete")
+            save(db, task)
+    finally:
+        guard.close()
+    return task  # No acknowledgement, resource cleanup, or Git operations.
+
+
 def snapshot(db, p):
     all_tasks = tasks(db)
     start = int(p.get("task_offset", 0))
@@ -301,7 +323,7 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error") if k in t} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via") if k in t} for t in result["tasks"]]
     else:
         result["tasks"] = [load(db, p["id"])]
     return result
@@ -409,7 +431,7 @@ def serve():
     db = connect()
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
     methods = dict(propose=propose, approve=approve, dispatch=dispatch, resume=resume,
-                   status=snapshot, ack=acknowledge)
+                   status=snapshot, ack=acknowledge, complete=complete)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
     native = NativeEvents(db, selector)
@@ -469,7 +491,8 @@ def worker(ident, attempt):
     session = folder / "session.jsonl"
     prompt = task.get("followup", task["brief"])
     policy = (ROOT / "WORKER.md").read_text()
-    args = [task["pi_binary"], "-p", "--mode", "json", "--no-extensions", "--no-skills", "--no-prompt-templates",
+    args = [task["pi_binary"], "--tui-mode", "regular", "--no-extensions", "--no-skills", "--no-prompt-templates",
+            "-e", str(ROOT / "bin/worker-events.ts"),
             "--no-approve", "--provider", task["provider"], "--model", task["model"],
             "--session", str(session), "--append-system-prompt", policy]
     if "effort" in task:  # Legacy in-flight tasks keep their existing CLI/session defaults.
@@ -478,17 +501,25 @@ def worker(ident, attempt):
     child = None
     last = {}
     error = ""
+    settled = False
+    uncertain = False
+    read_fd, write_fd = os.pipe()
     try:
-        with (folder / f"events-{attempt}.jsonl").open("w") as log, (folder / f"stderr-{attempt}.log").open("w") as err:
-            child = subprocess.Popen(args, cwd=task["worktree"], stdout=subprocess.PIPE,
-                                     stderr=err, text=True, start_new_session=True)
+        # Keep stdin/stdout and the foreground process group attached to Herdr's TTY.
+        # The private pipe carries events only; never parse or suppress Pi's terminal UI.
+        with os.fdopen(read_fd) as stream, (folder / f"events-{attempt}.jsonl").open("w") as log, (folder / f"stderr-{attempt}.log").open("w") as err:
+            try:
+                child = subprocess.Popen(args, cwd=task["worktree"], stderr=err,
+                                         env=dict(os.environ, MATE_EVENT_FD=str(write_fd)), pass_fds=(write_fd,))
+            finally:
+                os.close(write_fd)
             def stop(_sig, _frame):
                 if child.poll() is None:
-                    os.killpg(child.pid, signal.SIGTERM)
+                    child.terminate()
                 raise InterruptedError("Worker interrupted")
             signal.signal(signal.SIGTERM, stop)
             signal.signal(signal.SIGINT, stop)
-            for line in iter(lambda: child.stdout.readline(4 * 1024 * 1024 + 1), ""):
+            for line in iter(lambda: stream.readline(4 * 1024 * 1024 + 1), ""):
                 if len(line) > 4 * 1024 * 1024:
                     raise ValueError("Pi JSON event exceeded 4 MiB; see worker log")
                 log.write(line)
@@ -499,22 +530,27 @@ def worker(ident, attempt):
                     continue
                 if item.get("type") == "message_end" and item.get("message", {}).get("role") == "assistant":
                     last = item["message"]
-                delta = item.get("assistantMessageEvent", {})
-                if delta.get("type") == "text_delta":
-                    print(delta.get("delta", ""), end="", flush=True)
+                if item.get("type") == "agent_settled":
+                    settled = True
+                elif item.get("type") == "agent_start":
+                    settled = False
             code = child.wait()
-            if code or last.get("stopReason") != "stop":
-                error = f"Pi exit={code}, stopReason={last.get('stopReason')}: {last.get('errorMessage', '')}"
+            uncertain = code < 0  # A signal-killed Pi may have left tool subprocesses behind.
+            if code or not settled or last.get("stopReason") != "stop":
+                error = f"Pi exit={code}, settled={settled}, stopReason={last.get('stopReason')}: {last.get('errorMessage', '')}. See stderr-{attempt}.log"
     except Exception as exc:
         error = str(exc)
     finally:
         if child and child.poll() is None:
-            os.killpg(child.pid, signal.SIGTERM)
+            child.terminate()
             try:
                 child.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
+                child.kill()
                 child.wait()
+                uncertain = True
+        if uncertain:
+            error += " Pi was forcibly terminated; inspect pane/processes before any continuation."
         report = "\n".join(part.get("text", "") for part in last.get("content", []) if part.get("type") == "text")
         if not report.strip() and not error:
             error = "Pi exited without a final text report"
@@ -522,11 +558,13 @@ def worker(ident, attempt):
         with db:
             current = load(db, ident)
             if current["attempt"] == attempt:
-                current.update(state="failed" if error else "review", error=error)
+                current.update(state="attention" if uncertain else "failed" if error else "review", error=error)
                 save(db, current)
-                event(db, current, "failed" if error else "report", error or "Worker report available; not verified completion.")
+                event(db, current, "worker-missing" if uncertain else "failed" if error else "report", error or "Worker report available; not verified completion.")
         guard.close()
         db.close()
+    if error:
+        print(f"\n[Mate: {error}]", flush=True)
     print("\n[Mate: report saved; supervisor will wake automatically.]", flush=True)
 
 

@@ -165,6 +165,18 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned human-only /mate-complete command: reviewed-attempt confirmation and worker lock gate, persisted acceptance timestamp/local OS account, idempotent terminal complete state. No automatic ack, cleanup or Git operations; no upstream code copied.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "AGENTS.md"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R03", "R04"],
+      "description": "Native interactive Pi worker instead of print/JSON stdout. Referenced the pinned fm-spawn.sh pi launch_template; Mate-owned worker-events.ts uses a separate inherited pipe and agent_settled before graceful exit. Existing report/wake/continuation contracts retained; forced Pi termination is attention. No new upstream code copied; initial snapshots preserved.",
+      "paths": ["bin/mate.py", "bin/worker-events.ts"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R06"],
       "description": "Mate-owned mate.config.json worker model/effort defaults read on new dispatch; strict validation, task override precedence, unchanged saved continuation profiles. No new upstream code imported; initial snapshots preserved.",
       "paths": ["mate.config.json", ".pi/extensions/mate-supervisor.ts", "AGENTS.md"],
@@ -186,7 +198,8 @@
   "checks": [
     "python3 -m unittest discover -s tests -v",
     "node tests/extension-check.mjs",
+    "python3 tests/tui-smoke.py",
     "python3 tests/live-smoke.py"
   ],
-  "verification": "10 stdlib checks, model capability resolution, Calm toggle/persistence/save-failure/visibility/payload checks with mocked Pi UI + real control plane, real Herdr/Treehouse + fake Pi passed; visual terminal test and real OpenAI E2E not run"
+  "verification": "11 stdlib checks including completion gates/persistence and TUI argv/pipe separation/missing-settled/forced-kill, extension checks including human-only completion and bridge lifecycle, real Pi + real worker in PTY against localhost fake model, real Herdr/Treehouse + fake Pi passed. Subscription-backed TUI E2E not run."
 }
