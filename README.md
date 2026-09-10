@@ -54,7 +54,7 @@ Code verification/research/review must themselves be delegated.
 
 - `/mate-approve ID` — human-only scope/base approval; no implicit push/merge/deploy approval.
 - `/mate-status` — show tasks/events without invoking a model.
-- `/mate-complete ID` — human confirmation that a stopped `review` task is accepted as complete.
+- `/mate-complete ID` — accept a stopped `review` task, then optionally confirm closing its worker tab.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
@@ -84,9 +84,24 @@ Mate, not an authenticated GitHub/person identity), and `completed_via`.
 Repeating the command preserves the original record. It is a human command, not
 a model tool; no model call is needed to accept a task.
 
-Completion does not acknowledge pending events, push/merge, release the Treehouse
-lease, close the Herdr tab or delete reports. Completed tasks remain visible in
-status and cannot continue or reopen in this version; propose a new task if needed.
+Completion itself does not acknowledge pending events, push/merge, release the
+Treehouse lease or delete reports. A **separate confirmation** then offers to close
+the task's worker Herdr tab. Declining keeps the tab; running `/mate-complete ID`
+again on an already-complete task offers closure again without rewriting acceptance.
+
+Closure checks the worker lock, exact session/socket/workspace/tab/pane and original
+terminal identity, a single-pane tab, and shell-only foreground process information.
+Reused terminals, extra panes or another foreground process cause refusal. Shell-only
+foreground checks cannot prove there are no background jobs or busy shell builtins;
+closing loses terminal scrollback and may end shell jobs. Do not reuse or alter the
+worker tab while confirming closure. Worktree/lease, reports, Pi session and cost
+records remain. Missing tabs or validation errors do not undo task completion.
+
+Closure is journaled before the external operation. A lost/ambiguous response leaves
+`tab_close_state` as `closing`/`uncertain` and requires manual inspection, not automatic
+retry. Successful closure records `tab_closed_at`/`tab_closed_by`; repeats are no-ops.
+Completed tasks remain visible and cannot continue or reopen in this version;
+propose a new task if needed.
 
 ## Calm mode
 
@@ -193,6 +208,7 @@ attempt rather than counting the saved session history again.
 - Treehouse lease ID/holder, Git common directory and exact Herdr endpoint IDs are checked.
 - Task branches are created without force/reset; pooled branches/commits are preserved.
 - No automatic push, PR publication, merge, deploy, worktree return or pane cleanup.
+  The only tab-close action is the separately confirmed option after `/mate-complete`.
   Delivery mode is deliberately not selected yet. Leases/worktrees remain until you
   inspect and explicitly release them; they count against Treehouse's pool capacity.
 - Worker reports are untrusted evidence, never instructions or human approval.

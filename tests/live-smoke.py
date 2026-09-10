@@ -91,8 +91,21 @@ try:
     assert "Fixture worker report" in m.snapshot(db, {"id": "smoke"})["report"]["text"]
     assert m.snapshot(db, {})["events"]
     assert m.dispatch(db, dict(id="smoke", provider="openai-codex", model="fake"))["pane"] == task["pane"]
+    m.complete(db, dict(id='smoke', attempt=task['attempt']))
+    for _ in range(50):
+        info = herdr('pane', 'process-info', '--pane', task['pane'])['result']['process_info']
+        if [p['pid'] for p in info['foreground_processes']] == [info['shell_pid']]:
+            break
+        time.sleep(.1)
+    closed = m.close_tab(db, dict(id='smoke', attempt=task['attempt'], tab=task['tab']))
+    assert closed['tab_close_state'] == 'closed'
+    assert m.close_tab(db, dict(id='smoke', attempt=task['attempt'], tab=task['tab'])) == closed
+    assert herdr('pane', 'get', env['HERDR_PANE_ID'])['result']['pane']['pane_id'] == env['HERDR_PANE_ID']
+    assert Path(task['worktree']).is_dir()
+    assert 'Fixture worker report' in m.snapshot(db, {'id': 'smoke'})['report']['text']
+    m.check_lease(task)  # Tab closure must retain its Treehouse lease.
     ok = True
-    print("PASS: real Herdr subscription/pane + real Treehouse lease + pinned base + fake Pi worker + durable report + duplicate dispatch guard")
+    print("PASS: real Herdr subscription/pane + real Treehouse lease + pinned base + fake Pi worker + durable report + duplicate dispatch guard + exact worker tab closure (lease/report/owner pane retained)")
 finally:
     if db:
         db.close()

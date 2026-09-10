@@ -21,7 +21,7 @@ const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 git('init', '-b', 'main'); git('-c', 'user.name=Mate Test', '-c', 'user.email=mate@test.invalid', 'commit', '--allow-empty', '-m', 'base');
 const handlers = {}, tools = {}, commands = {}, renderers = {}, messages = [], notices = [];
-let active = ['read', 'write', 'bash', 'external_tool'], approval = false, expanded = false;
+let active = ['read', 'write', 'bash', 'external_tool'], approval = false, closeApproval = false, expanded = false;
 const models = [
   { provider: 'openai-codex', id: 'main-model', reasoning: true },
   { provider: 'openai-codex', id: 'worker-model', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } },
@@ -29,7 +29,7 @@ const models = [
 ];
 const ctx = { mode: 'tui', hasUI: true, model: models[0], thinkingLevel: 'high',
   modelRegistry: { find: (provider, id) => models.find(m => m.provider === provider && m.id === id) },
-  ui: { notify: (...args) => notices.push(args), setStatus() {}, confirm: async () => approval,
+  ui: { notify: (...args) => notices.push(args), setStatus() {}, confirm: async title => title === 'Close worker Herdr tab too?' ? closeApproval : approval,
     getToolsExpanded: () => expanded, setToolsExpanded: value => { expanded = value; } } };
 const pi = {
   on(name, fn) { handlers[name] = fn; },
@@ -212,6 +212,8 @@ try {
   assert.equal(messages.at(-1).message.details.events[0].kind, 'test');
   await call('mate_ack', { events: [1], note: 'Relayed fixture outcome' });
   assert.equal((await call('mate_status')).events.length, 0);
+  assert.equal(tools.mate_close_tab, undefined, 'tab closure is not a model tool');
+  assert.equal(handlers.tool_call({ toolName: 'mate_close_tab' }).block, true);
   assert.equal(tools.mate_complete, undefined, 'completion is not a model tool');
   assert.equal(handlers.tool_call({ toolName: 'mate_complete' }).block, true);
   await commands['mate-complete'].handler('inspect', ctx);
@@ -233,6 +235,14 @@ try {
   assert.equal(renderers['mate-completed'], undefined, 'Calm must not hide human acceptance');
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal(messages.filter(m => m.message.customType === 'mate-completed').length, 1);
+  assert.equal((await call('mate_status')).tasks[0].tab_close_state, undefined, 'declined closure retains tab');
+  // This fixture has no actual Herdr endpoint: accept closure and verify its failure
+  // is visible without undoing the already-recorded completion.
+  closeApproval = true;
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.equal(notices.at(-1)[1], 'error');
+  assert.equal((await call('mate_status')).tasks[0].state, 'complete');
+  assert.equal(messages.filter(m => m.message.customType === 'mate-tab-closed').length, 0);
   await handlers.session_shutdown();
   const stopped = messages.length;
   await sleep(2100);

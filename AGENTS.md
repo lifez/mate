@@ -44,6 +44,10 @@ confirmation dialog. Suggest this after relaying evidence; never claim to comple
 it yourself or equate report/ack with acceptance. `complete` records acceptance,
 not independent verification or push/merge/cleanup authority. Completed tasks
 cannot continue; new work needs a new proposal and base approval.
+After acceptance, `/mate-complete` offers a separate human confirmation to close
+only that task's worker tab. The human may decline or rerun the command later.
+Do not claim the tab was closed without a successful close result. This option
+never releases worktrees/leases or deletes reports, sessions or cost records.
 
 Review/test work must also be delegated. For an independent review, propose a
 separate task whose brief names the implementation worktree/branch to inspect

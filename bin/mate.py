@@ -301,6 +301,51 @@ def complete(db, p):
     return task  # No acknowledgement, resource cleanup, or Git operations.
 
 
+def close_tab(db, p):
+    task = load(db, p['id'])
+    if task['state'] != 'complete' or p.get('attempt') != task['attempt'] or p.get('tab') != task.get('tab'):
+        raise ValueError('Tab closure requires the exact completed task/attempt/tab')
+    if task.get('tab_close_state') == 'closed':
+        return task
+    if task.get('tab_close_state') in ('closing', 'uncertain'):
+        raise ValueError('Previous tab closure is uncertain; inspect manually, do not retry blindly')
+    try:
+        guard = lock(HOME / task['id'] / 'run.lock')
+    except BlockingIOError:
+        raise ValueError('Worker is still active; cannot close its tab') from None
+    try:
+        pane = check_endpoint(task, task['pane'])
+        original = task.get('endpoint_receipt', {}).get('root_pane', {}).get('terminal_id')
+        if not original or pane.get('terminal_id') != original:
+            raise ValueError('Worker terminal identity changed; refusing to close a reused pane')
+        tab = herdr(task, 'tab', 'get', task['tab']).get('tab', {})
+        if tab.get('tab_id') != task['tab'] or tab.get('workspace_id') != task['workspace'] or tab.get('pane_count') != 1:
+            raise ValueError('Tab identity changed or contains additional panes; close manually')
+        # ponytail: foreground-shell check cannot detect background jobs/busy builtins;
+        # confirmation warns about job loss; use a job inventory if Herdr adds one.
+        process = herdr(task, 'pane', 'process-info', '--pane', task['pane']).get('process_info', {})
+        foreground = process.get('foreground_processes', [])
+        if process.get('pane_id') != task['pane'] or not process.get('shell_pid') or len(foreground) != 1 or foreground[0].get('pid') != process['shell_pid']:
+            raise ValueError('Worker pane is not an idle shell; refusing to interrupt another process')
+        task['tab_close_state'] = 'closing'
+        with db:
+            save(db, task)  # Journal before an external operation with an ambiguous failure mode.
+        try:
+            herdr(task, 'tab', 'close', task['tab'])
+        except Exception as exc:
+            task.update(tab_close_state='uncertain', tab_close_error=str(exc))
+            with db:
+                save(db, task)
+            raise
+        task.update(tab_close_state='closed', tab_closed_at=time.time(),
+                    tab_closed_by=pwd.getpwuid(os.getuid()).pw_name)
+        with db:
+            save(db, task)
+        return task
+    finally:
+        guard.close()
+
+
 def empty_usage():
     return dict(messages=0, token_reported_messages=0, cost_reported_messages=0,
                 input_tokens=0, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0,
@@ -367,7 +412,7 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via") if k in t} | {"usage_total": usage_total(t)} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t)} for t in result["tasks"]]
     else:
         task = load(db, p["id"])
         result["tasks"] = [dict(task, usage_total=usage_total(task))]
@@ -477,7 +522,7 @@ def serve():
     db = connect()
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
     methods = dict(propose=propose, approve=approve, dispatch=dispatch, resume=resume,
-                   status=snapshot, ack=acknowledge, complete=complete)
+                   status=snapshot, ack=acknowledge, complete=complete, close_tab=close_tab)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
     native = NativeEvents(db, selector)

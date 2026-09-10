@@ -242,22 +242,32 @@ export default function (pi: ExtensionAPI) {
           { triggerTurn: true, deliverAs: "followUp" });
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
-  pi.registerCommand("mate-complete", { description: "Human-only task acceptance: /mate-complete TASK_ID (no cleanup)",
+  pi.registerCommand("mate-complete", { description: "Human task acceptance, then optional worker-tab closure: /mate-complete TASK_ID",
     handler: async (args, ctx) => {
       try {
         if (ctx.mode !== "tui") throw new Error("Human TUI confirmation required");
         const { tasks } = await rpc("status", { id: args.trim() });
-        const task = tasks[0];
-        if (task.state === "complete") { ctx.ui.notify(`${task.id} is already complete`, "info"); return; }
-        if (task.state !== "review") throw new Error("Only a task awaiting review can be completed");
-        const yes = await ctx.ui.confirm("Accept task as complete?",
-          `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\nConfirm you have reviewed and accept this result. This records acceptance, not independent verification. No push, merge, event acknowledgement or resource cleanup. Completion cannot be reopened in this version.`);
-        if (!yes) { ctx.ui.notify("Not completed; task remains in review", "info"); return; }
-        const completed = await rpc("complete", { id: task.id, attempt: task.attempt });
-        pi.sendMessage({ customType: "mate-completed", display: true,
-          content: `Human accepted ${completed.id} attempt ${completed.attempt} as complete. Recorded local account: ${completed.completed_by}. Worktree/tab retained; no push/merge/cleanup authorized.` },
-          { triggerTurn: false });
-        ctx.ui.notify(`${completed.id} marked complete`, "info");
+        let task = tasks[0];
+        if (task.state !== "complete") {
+          if (task.state !== "review") throw new Error("Only a task awaiting review can be completed");
+          const yes = await ctx.ui.confirm("Accept task as complete?",
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\nConfirm you have reviewed and accept this result. This records acceptance, not independent verification. No push, merge, event acknowledgement or resource cleanup. Completion cannot be reopened in this version.`);
+          if (!yes) { ctx.ui.notify("Not completed; task remains in review", "info"); return; }
+          task = await rpc("complete", { id: task.id, attempt: task.attempt });
+          pi.sendMessage({ customType: "mate-completed", display: true,
+            content: `Human accepted ${task.id} attempt ${task.attempt} as complete. Recorded local account: ${task.completed_by}. No push/merge/cleanup authorized without separate confirmation.` },
+            { triggerTurn: false });
+        }
+        ctx.ui.notify(`${task.id} is complete`, "info");
+        if (task.tab_close_state === "closed") return;
+        if (task.tab_close_state) throw new Error("Task remains complete, but previous tab closure is uncertain; inspect manually");
+        const close = await ctx.ui.confirm("Close worker Herdr tab too?",
+          `${task.id}\nSession: ${task.session}\nWorkspace: ${task.workspace}\nTab: ${task.tab}\nPane: ${task.pane}\n\nClose only this worker tab if its terminal identity is unchanged, it has no extra panes and is back at its shell. Closing loses terminal scrollback and may end background shell jobs. Worktree, lease, Pi session, reports and cost records remain. Decline to keep the tab.`);
+        if (!close) { ctx.ui.notify("Task complete; worker tab retained", "info"); return; }
+        await rpc("close_tab", { id: task.id, attempt: task.attempt, tab: task.tab });
+        pi.sendMessage({ customType: "mate-tab-closed", display: true,
+          content: `Human confirmed closing ${task.id}'s worker tab ${task.tab}. Worktree, lease, reports, session and cost records retained.` }, { triggerTurn: false });
+        ctx.ui.notify("Worker tab closed; worktree and reports retained", "info");
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
   pi.registerCommand("mate-status", { description: "Show local tasks without using model quota",

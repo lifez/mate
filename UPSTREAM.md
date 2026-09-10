@@ -19,6 +19,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   และไม่รวม supervisor usage (ไม่มี upstream import เพิ่ม; regression + real Pi fixture checks)
 - Pi-owned control plane พร้อม Herdr native event helper และ 2s durable-result polling
 - Two-worker limit, stopped-worker continuation, stalled alerts และ fail-closed recovery
+- Mate-owned optional tab closure: หลัง complete ถามยืนยันแยกก่อนปิดแท็บ worker เท่านั้น;
+  ตรวจ original terminal identity/worker lock/single pane/foreground shell, journal uncertain close,
+  ไม่คืน lease/ลบ worktree/report/cost และไม่ import upstream cleanup machinery
 - Mate-owned `/mate-complete ID`: human confirmation จาก review → complete เท่านั้น,
   ตรวจ exact attempt + worker lock, บันทึกเวลา/OS account; ไม่ ack/cleanup/merge และไม่มี reopen
   (ไม่มี upstream import เพิ่ม; tests ตรวจ gate/idempotency/persistence และ UI deny/accept)

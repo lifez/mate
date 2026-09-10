@@ -150,6 +150,65 @@ class MateTests(unittest.TestCase):
         self.assertFalse(m.snapshot(self.db, {})["events"])
         self.assertEqual(m.load(self.db, "fix")["state"], "awaiting-base")
 
+    def test_optional_tab_close_checks_identity_activity_and_preserves_resources(self):
+        task = self.propose()
+        (self.home / 'fix').mkdir()
+        task.update(state='complete', attempt=1, pane='w1:p2', tab='w1:t2', workspace='w1',
+                    endpoint_receipt={'root_pane': {'terminal_id': 'original-terminal'}})
+        with self.db:
+            m.save(self.db, task)
+        params = dict(id='fix', attempt=1, tab='w1:t2')
+        task['state'] = 'review'
+        with self.db: m.save(self.db, task)
+        with self.assertRaisesRegex(ValueError, 'completed task'): m.close_tab(self.db, params)
+        task['state'] = 'complete'
+        with self.db: m.save(self.db, task)
+        pane = dict(pane_id='w1:p2', tab_id='w1:t2', workspace_id='w1', terminal_id='original-terminal')
+        tab = dict(tab_id='w1:t2', workspace_id='w1', pane_count=1)
+        process = dict(pane_id='w1:p2', shell_pid=10, foreground_processes=[dict(pid=10)])
+        closed = []
+        def endpoint(_task, *args):
+            if args[:2] == ('pane', 'get'): return dict(pane=pane)
+            if args[:2] == ('tab', 'get'): return dict(tab=tab)
+            if args[:2] == ('pane', 'process-info'): return dict(process_info=process)
+            if args[:2] == ('tab', 'close'): closed.append(args); return {}
+            raise AssertionError(args)
+        with patch.object(m, 'herdr', endpoint), patch.object(m, 'run', side_effect=AssertionError('No Git/lease cleanup')):
+            with self.assertRaises(ValueError): m.close_tab(self.db, dict(params, attempt=2))
+            with self.assertRaises(ValueError): m.close_tab(self.db, dict(params, tab='foreign'))
+            guard = m.lock(self.home / 'fix/run.lock')
+            try:
+                with self.assertRaisesRegex(ValueError, 'still active'): m.close_tab(self.db, params)
+            finally: guard.close()
+            pane['terminal_id'] = 'reused-terminal'
+            with self.assertRaisesRegex(ValueError, 'identity'): m.close_tab(self.db, params)
+            pane['terminal_id'] = 'original-terminal'
+            tab['pane_count'] = 2
+            with self.assertRaisesRegex(ValueError, 'additional panes'): m.close_tab(self.db, params)
+            tab['pane_count'] = 1
+            process['foreground_processes'] = [dict(pid=20)]
+            with self.assertRaisesRegex(ValueError, 'idle shell'): m.close_tab(self.db, params)
+            process['foreground_processes'] = [dict(pid=10)]
+            self.assertEqual(closed, [])
+            result = m.close_tab(self.db, params)
+            self.assertEqual(result['state'], 'complete')
+            self.assertEqual(result['tab_close_state'], 'closed')
+            self.assertTrue(result['tab_closed_by'])
+            self.assertEqual(result['sha'], task['sha'])
+            self.assertEqual(m.close_tab(self.db, params), result)
+            self.assertEqual(closed, [('tab', 'close', 'w1:t2')])
+        # Simulate an ambiguous close receipt; never automatically try again.
+        with self.db: m.save(self.db, task)
+        def ambiguous(t, *args):
+            if args[:2] == ('tab', 'close'): raise RuntimeError('lost receipt')
+            return endpoint(t, *args)
+        with patch.object(m, 'herdr', ambiguous):
+            with self.assertRaisesRegex(RuntimeError, 'lost receipt'): m.close_tab(self.db, params)
+        self.assertEqual(m.load(self.db, 'fix')['tab_close_state'], 'uncertain')
+        with patch.object(m, 'herdr', side_effect=AssertionError('No retry')):
+            with self.assertRaisesRegex(ValueError, 'uncertain'): m.close_tab(self.db, params)
+        self.assertEqual(m.load(self.db, 'fix')['state'], 'complete')
+
     def test_usage_totals_preserve_unknowns_and_sum_attempts(self):
         task = self.propose()
         task.update(state='running', attempt=1)
