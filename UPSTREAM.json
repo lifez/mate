@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "repository": "https://github.com/kunchenguid/firstmate",
+  "update_policy": "selective-port; never merge or pull upstream over Mate",
+  "components": [
+    {
+      "id": "R01",
+      "mode": "adapted",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "bounded transport, handshake, event projection; stricter validation and buffer limit",
+      "sources": [
+        {
+          "path": "bin/backends/herdr-eventwait.py",
+          "blob": "96e7f6650bea39852936fcb34f06540a85292cec"
+        }
+      ],
+      "destinations": [
+        {
+          "path": "bin/herdr-eventwait.py",
+          "initial_sha256": "16a8e537c4d6fc8f3f9d938c2368e6a15c74432ffeb25a0867792439ceeffe8c"
+        }
+      ],
+      "local_commit": null,
+      "license": "third_party/firstmate/LICENSE"
+    },
+    {
+      "id": "R02",
+      "mode": "adapted",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "session generation ownership, child lifecycle, bounded retries and follow-up delivery; Mate-specific RPC/state/UI",
+      "sources": [
+        {
+          "path": ".pi/extensions/fm-primary-pi-watch.ts",
+          "blob": "923ec6c310dd0ee1c0f753882403ab77e48737d8"
+        }
+      ],
+      "destinations": [
+        {
+          "path": ".pi/extensions/mate-supervisor.ts",
+          "initial_sha256": "5a96168c243e764142f1c08eb5425334fff7fe36a2ca06640713564c579f9969"
+        }
+      ],
+      "local_commit": null,
+      "license": "third_party/firstmate/LICENSE"
+    },
+    {
+      "id": "R03",
+      "mode": "reference-only",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "selected wake/ack/recovery contracts; new SQLite/flock implementation, not a full source audit",
+      "sources": [
+        {
+          "path": "bin/fm-wake-lib.sh",
+          "blob": "eb6a14c5e5fb04149d7a40a15c2076a040fa4c1d"
+        },
+        {
+          "path": "bin/fm-wake-drain.sh",
+          "blob": "628bf27e45a3be280e1f7648bbbc7be12f8e53ea"
+        },
+        {
+          "path": "bin/fm-watch-arm.sh",
+          "blob": "5ba132401af497ace3a67eb04e4d79fbd2cd8d7b"
+        },
+        {
+          "path": "bin/fm-watch.sh",
+          "blob": "3f4a57afd65530f34c266621d220c4677c1c0419"
+        }
+      ],
+      "destinations": [
+        {
+          "path": "bin/mate.py",
+          "initial_sha256": "4822d1352e3b8b96fee249997f9366d7e8b99c0eacf22c9418ee11a16052eec4"
+        }
+      ],
+      "local_commit": null,
+      "license": null
+    },
+    {
+      "id": "R04",
+      "mode": "reference-only",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "isolated worktree safety; new human-approved SHA + durable lease workflow, no default-branch reset",
+      "sources": [
+        {
+          "path": "bin/fm-spawn.sh",
+          "blob": "bd461ed96040c8c20d40dc707bfea4be38dd8acc"
+        }
+      ],
+      "destinations": [
+        {
+          "path": "bin/mate.py",
+          "initial_sha256": "4822d1352e3b8b96fee249997f9366d7e8b99c0eacf22c9418ee11a16052eec4"
+        }
+      ],
+      "local_commit": null,
+      "license": null
+    },
+    {
+      "id": "R05",
+      "mode": "reference-only",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "selected exact-endpoint control contracts; own calls to installed Herdr CLI",
+      "sources": [
+        {
+          "path": "bin/backends/herdr.sh",
+          "blob": "7367a8db5c7361780990294e649044f0e0d31be6"
+        }
+      ],
+      "destinations": [
+        {
+          "path": "bin/mate.py",
+          "initial_sha256": "4822d1352e3b8b96fee249997f9366d7e8b99c0eacf22c9418ee11a16052eec4"
+        }
+      ],
+      "local_commit": null,
+      "license": null
+    },
+    {
+      "id": "R06",
+      "mode": "reference-only",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "selected supervisor/authority contracts; own instructions",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "blob": "7ea57f1be5dfb727282e70508486f6ea3b28af7a"
+        }
+      ],
+      "destinations": [
+        {
+          "path": "AGENTS.md",
+          "initial_sha256": "5a9c45e1efb868fc2ee68475ef9c34993584726bdbd36da4b2c2cb95336545b3"
+        },
+        {
+          "path": "WORKER.md",
+          "initial_sha256": "f7a82fa5f604136ca4fd36572422c379869fdc8c22d1e8d9fe48f29509d65b2e"
+        }
+      ],
+      "local_commit": null,
+      "license": null
+    },
+    {
+      "id": "R07",
+      "mode": "adapted",
+      "source_commit": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_through": "4930d2caaba8a14b13b754cefc4bd22d77d993d0",
+      "reviewed_scope": "Home-persistent preference, self-rendering and public redraw patterns; own conservative Mate-only visibility rules. No private UI patches, built-in overrides, thinking suppression or boat animation.",
+      "sources": [
+        { "path": ".pi/extensions/fm-calm.ts", "blob": "13bafc6fe53befed3bc2b95d0a3466a461377e8e" },
+        { "path": ".pi/extensions/lib/fm-calm-visibility.ts", "blob": "27a03f04c1f4ae9bbbf1cad530fb23221ec48b3b", "mode": "reference-only" }
+      ],
+      "destinations": [
+        { "path": ".pi/extensions/lib/calm.ts", "initial_sha256": "e523a00ab9d1d13a6a5b1c4f00b9e15c01bb52884802f479db7afebd734be1f3" }
+      ],
+      "local_commit": null,
+      "license": "third_party/firstmate/LICENSE"
+    }
+  ],
+  "deferred_updates": [],
+  "local_changes": [
+    {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Per-task model/effort overrides for dispatch and continuation; resolve against Pi model capabilities, persist selected profile, pass --thinking to worker CLI. Initial SHA-256 snapshots remain unchanged for comparison.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "AGENTS.md"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R07"],
+      "description": "Wire focused Calm renderers into Mate tools and add wake event details without changing model content, delivery or acknowledgement. Preserve previous initial snapshots.",
+      "paths": [".pi/extensions/mate-supervisor.ts", ".pi/extensions/lib/calm.ts"],
+      "local_commit": null
+    }
+  ],
+  "checks": [
+    "python3 -m unittest discover -s tests -v",
+    "node tests/extension-check.mjs",
+    "python3 tests/live-smoke.py"
+  ],
+  "verification": "10 stdlib checks, model capability resolution, Calm toggle/persistence/save-failure/visibility/payload checks with mocked Pi UI + real control plane, real Herdr/Treehouse + fake Pi passed; visual terminal test and real OpenAI E2E not run"
+}
