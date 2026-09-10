@@ -4,7 +4,42 @@ Personal supervisor built on **pi + Herdr + Treehouse**. Mate is its own runtime
 not a Firstmate installation. Selected Firstmate code/patterns are tracked in
 [UPSTREAM.md](UPSTREAM.md) and [UPSTREAM.json](UPSTREAM.json).
 
-## Start
+## Choose a mode
+
+To **develop Mate itself**, start a fresh coding session:
+
+```sh
+cd /Users/win/mine/mate
+MATE_MODE=dev pi
+```
+
+In development mode, Mate registers no supervisor tools/commands, no tool guard,
+no supervisor policy injection, no Calm renderer and no watcher/control-plane child.
+Normal pi coding tools remain available; you can read/edit/test the project directly.
+It does not launch workers, acquire leases or touch Mate task state merely by starting.
+Global pi extensions/skills still load normally; this is not a sandbox or a global
+extension-disable switch.
+
+Use a **fresh session**, not `--continue`/`--session` pointing at an old supervisor
+conversation (which still contains its previous operational messages). To switch
+modes, exit that pi process and launch again with the desired environment. `/reload`
+keeps the process's existing mode; it does not change the inherited environment.
+Use the one-command assignment above rather than exporting `MATE_MODE` globally.
+Only the exact value `dev` disables Mate; unset/other values keep supervisor behavior.
+If your shell already exports it, `env -u MATE_MODE pi` restores the default.
+
+Role files:
+- `AGENTS.md` — repository development instructions, loaded normally by pi.
+- `SUPERVISOR.md` — runtime coordinator policy, injected only by the active Mate supervisor extension.
+- `WORKER.md` — appended only when Mate explicitly launches a delegated worker.
+  Opening pi or reading this file does not itself start worker mode.
+
+Development mode does not stop an already-running supervisor/worker. Coordinate
+runtime edits with the user and wait for workers to stop; tests use disposable state.
+Authentication and `mate.config.json` worker defaults are unchanged. No launcher
+wrapper or new dependency is required.
+
+## Start (use Mate as supervisor)
 
 Inside a Herdr pane:
 

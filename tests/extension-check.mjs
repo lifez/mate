@@ -1,7 +1,7 @@
 // Real Python control plane + mocked Pi UI/model. No model calls or live workers.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync, openSync, closeSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -39,7 +39,15 @@ const pi = {
   setActiveTools(names) { active = names; },
   sendMessage(message, options) { messages.push({ message, options }); },
 };
+const previousMode = process.env.MATE_MODE;
+process.env.MATE_MODE = 'dev';
+factory(new Proxy({}, { get(_target, key) { throw new Error(`Dev mode touched Pi API: ${String(key)}`); } }));
+assert.equal(existsSync(process.env.MATE_HOME), false, 'dev mode creates no runtime state');
+assert.deepEqual(active, ['read', 'write', 'bash', 'external_tool'], 'dev mode leaves tools untouched');
+delete process.env.MATE_MODE;
 factory(pi);
+assert.equal(handlers.before_agent_start({ systemPrompt: 'base' }).systemPrompt,
+  'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8'), 'runtime injects only supervisor policy');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function wait(check) {
   let last;
@@ -247,8 +255,10 @@ try {
   const stopped = messages.length;
   await sleep(2100);
   assert.equal(messages.length, stopped, 'shutdown does not re-arm');
-  console.log('PASS: worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval, follow-up wake, dedup, restart replay, ack, shutdown');
+  console.log('PASS: dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval, follow-up wake, dedup, restart replay, ack, shutdown');
 } finally {
   await handlers.session_shutdown();
   rmSync(tmp, { recursive: true, force: true });
+  if (previousMode === undefined) delete process.env.MATE_MODE;
+  else process.env.MATE_MODE = previousMode;
 }

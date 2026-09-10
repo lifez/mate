@@ -56,6 +56,7 @@ const allowed = ["mate_propose", "mate_dispatch", "mate_status", "mate_ack", "ma
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} });
 
 export default function (pi: ExtensionAPI) {
+  if (process.env.MATE_MODE === "dev") return; // No hooks, tools, commands or child processes in development sessions.
   const calm = createCalm(pi, root);
   const registerTool = (definition: Parameters<typeof pi.registerTool>[0]) => pi.registerTool(calm.tool(definition));
   let generation = 0;
@@ -196,7 +197,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", (event) => {
     if (!allowed.includes(event.toolName)) return { block: true, reason: "Mate supervisor must delegate project work; only orchestration tools are allowed." };
   });
-  pi.on("before_agent_start", (event) => ({ systemPrompt: event.systemPrompt + "\n\n" + readFileSync(resolve(root, "AGENTS.md"), "utf8") }));
+  pi.on("before_agent_start", (event) => ({ systemPrompt: event.systemPrompt + "\n\n" + readFileSync(resolve(root, "SUPERVISOR.md"), "utf8") }));
   pi.on("agent_end", () => {
     if (delivered.size) context?.ui.setStatus("mate", "Check unacknowledged events with mate_status; /mate-wake replays them");
   });

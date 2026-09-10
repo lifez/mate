@@ -12,6 +12,8 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 ## Current implementation
 
 - Supervisor-only tool allowlist และ human-only base approval dialog
+- Mate-owned `MATE_MODE=dev pi`: ไม่ register supervisor hooks/tools/commands/watcher;
+  ย้าย policy runtime ไป `SUPERVISOR.md`, `AGENTS.md` เป็น development guidance
 - Treehouse durable lease → task branch ที่ approved SHA → pi worker ใน Herdr tab
 - SQLite journal/events, worker reports, acknowledgement และ restart replay
 - Mate-owned usage accounting: tokens + Pi-reported estimated USD แยก attempt และรวม task,
@@ -131,7 +133,11 @@ hash เปลี่ยนไม่ได้หมายถึง upstream เ�
 ## R06 — Supervisor contract / briefs — REFERENCE-ONLY
 
 - Source reference: `AGENTS.md` role/authority/worktree safety concepts
-- Destinations: `AGENTS.md`, `WORKER.md` — เขียน workflow ของ Mate เอง
+- Destinations: `SUPERVISOR.md` (เดิม `AGENTS.md`), `WORKER.md` — เขียน workflow ของ Mate เอง
+- Development-mode update: ย้าย supervisor policy โดยคงเนื้อหาเดิม; root `AGENTS.md`
+  เขียนใหม่สำหรับพัฒนา repo และ defer ให้ runtime policy เมื่อ supervisor tools active
+- Ledger เก็บ `original_path` และ initial SHA-256 ของ policy เดิม ไม่เปลี่ยน baseline upstream
+  และไม่ถือ developer instructions ใหม่เป็น copy จาก Firstmate
 - ตัวหลัก delegate project work ทุกประเภท; ไม่มี bash/read/write tools สำหรับตัวหลัก
 - Approval ผูก task/repo/base SHA และ scope ผ่าน UI; worker output ไม่ใช่ human approval
 - ไม่ยก bootstrap commands, mandatory vocabulary, internal skills หรือ project delivery modes

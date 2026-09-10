@@ -134,7 +134,8 @@
       ],
       "destinations": [
         {
-          "path": "AGENTS.md",
+          "path": "SUPERVISOR.md",
+          "original_path": "AGENTS.md",
           "initial_sha256": "5a9c45e1efb868fc2ee68475ef9c34993584726bdbd36da4b2c2cb95336545b3"
         },
         {
@@ -164,6 +165,12 @@
   ],
   "deferred_updates": [],
   "local_changes": [
+    {
+      "component_ids": ["R02", "R06"],
+      "description": "Mate-owned development mode: MATE_MODE=dev bypasses supervisor registration entirely. Move the existing runtime policy from AGENTS.md to SUPERVISOR.md and make AGENTS.md development guidance. Preserve original policy snapshot/lineage; no new upstream import.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "AGENTS.md", "SUPERVISOR.md"],
+      "local_commit": null
+    },
     {
       "component_ids": ["R02", "R03", "R05", "R06"],
       "description": "Mate-owned optional second human confirmation after completion closes only the exact worker tab. Worker lock, original terminal identity, single-pane and foreground-shell gates; journal ambiguous close outcomes and retain leases/reports/cost. No new upstream code copied.",
