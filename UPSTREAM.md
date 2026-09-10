@@ -14,6 +14,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Supervisor-only tool allowlist และ human-only base approval dialog
 - Treehouse durable lease → task branch ที่ approved SHA → pi worker ใน Herdr tab
 - SQLite journal/events, worker reports, acknowledgement และ restart replay
+- Mate-owned usage accounting: tokens + Pi-reported estimated USD แยก attempt และรวม task,
+  persist ทุก finalized assistant message; แสดง unknown/partial coverage ไม่ตีราคา subscription
+  และไม่รวม supervisor usage (ไม่มี upstream import เพิ่ม; regression + real Pi fixture checks)
 - Pi-owned control plane พร้อม Herdr native event helper และ 2s durable-result polling
 - Two-worker limit, stopped-worker continuation, stalled alerts และ fail-closed recovery
 - Mate-owned `/mate-complete ID`: human confirmation จาก review → complete เท่านั้น,

@@ -150,6 +150,41 @@ class MateTests(unittest.TestCase):
         self.assertFalse(m.snapshot(self.db, {})["events"])
         self.assertEqual(m.load(self.db, "fix")["state"], "awaiting-base")
 
+    def test_usage_totals_preserve_unknowns_and_sum_attempts(self):
+        task = self.propose()
+        task.update(state='running', attempt=1)
+        with self.db:
+            m.save(self.db, task)
+        self.assertIsNone(m.snapshot(self.db, {})['tasks'][0]['usage_total']['estimated_cost_usd'])
+        self.assertEqual(m.usage_total(task)['untracked_attempts'], [1])
+        message = dict(usage=dict(input=100, output=20, cacheRead=30, cacheWrite=10, cost=dict(total=0.125)))
+        m.record_usage(self.db, 'fix', 1, message)
+        m.record_usage(self.db, 'fix', 1, {})  # Missing usage is not a free request.
+        m.record_usage(self.db, 'fix', 1, dict(usage=dict(input=-1, output=2, cacheRead=0, cacheWrite=0, cost=dict(total=float('nan')))))
+        self.db.close(); self.db = m.connect()
+        first = m.snapshot(self.db, dict(id='fix', attempt=1))['attempt_usage']
+        self.assertEqual(first['messages'], 3)
+        self.assertEqual(first['token_reported_messages'], 1)
+        self.assertEqual(first['cost_reported_messages'], 1)
+        self.assertEqual(first['estimated_cost_usd'], 0.125)
+        self.assertEqual(first['input_tokens'], 100)
+        task = m.load(self.db, 'fix'); task['attempt'] = 2
+        with self.db:
+            m.save(self.db, task)
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            m.record_usage(self.db, 'fix', 1, message)
+        m.record_usage(self.db, 'fix', 2, message)
+        total = m.snapshot(self.db, {})['tasks'][0]['usage_total']
+        self.assertEqual(total['estimated_cost_usd'], 0.25)
+        self.assertEqual(total['output_tokens'], 40)
+        self.assertEqual(total['cache_read_tokens'], 60)
+        self.assertEqual(total['cache_write_tokens'], 20)
+        self.assertEqual(total['untracked_attempts'], [])
+        self.assertEqual(m.snapshot(self.db, dict(id='fix', attempt=1))['attempt_usage'], first)
+        task = m.load(self.db, 'fix'); del task['usage']['1']
+        self.assertEqual(m.usage_total(task)['untracked_attempts'], [1])
+        self.assertEqual(m.usage_total(task)['estimated_cost_usd'], 0.125)
+
     def test_complete_requires_review_stopped_worker_and_exact_attempt(self):
         task = self.propose()
         (self.home / 'fix').mkdir()
@@ -261,7 +296,7 @@ class MateTests(unittest.TestCase):
         fakebin.mkdir()
         for name, content in {
             "treehouse": "#!/usr/bin/env python3\nimport json\nprint(" + repr(json.dumps(self.leases)) + ")\n",
-            "pi": "#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ['MATE_HOME'], 'argv.json').write_text(json.dumps(sys.argv))\nerror=os.environ.get('TEST_PROVIDER_ERROR')\nprint('Native Pi terminal output')\nf=os.fdopen(int(os.environ['MATE_EVENT_FD']), 'w')\nprint(json.dumps({'type':'message_end','message':{'role':'assistant','stopReason':'error' if error else 'stop','errorMessage':'quota' if error else '', 'content':[{'type':'text','text':'Evidence: checked fixture.'}]}}), file=f)\nif not os.environ.get('TEST_NO_SETTLED'): print(json.dumps({'type':'agent_settled'}), file=f)\nf.close()\nif os.environ.get('TEST_KILL_PI'): os.kill(os.getpid(), 9)\n"
+            "pi": "#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ['MATE_HOME'], 'argv.json').write_text(json.dumps(sys.argv))\nerror=os.environ.get('TEST_PROVIDER_ERROR')\nprint('Native Pi terminal output')\nf=os.fdopen(int(os.environ['MATE_EVENT_FD']), 'w')\nprint(json.dumps({'type':'message_end','message':{'role':'assistant','stopReason':'error' if error else 'stop','errorMessage':'quota' if error else '', 'usage':{'input':100,'output':20,'cacheRead':30,'cacheWrite':10,'cost':{'total':0.125}}, 'content':[{'type':'text','text':'Evidence: checked fixture.'}]}}), file=f)\nif not os.environ.get('TEST_NO_SETTLED'): print(json.dumps({'type':'agent_settled'}), file=f)\nf.close()\nif os.environ.get('TEST_KILL_PI'): os.kill(os.getpid(), 9)\n"
         }.items():
             path = fakebin / name
             path.write_text(content); path.chmod(0o755)
@@ -273,6 +308,7 @@ class MateTests(unittest.TestCase):
         output = subprocess.run(command, env=env, cwd=task["worktree"], capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('Native Pi terminal output', output.stdout)
         self.assertEqual(m.load(self.db, "fix")["state"], "review")
+        self.assertEqual(m.snapshot(self.db, {})['tasks'][0]['usage_total']['estimated_cost_usd'], 0.125)
         argv = json.loads((self.home / "argv.json").read_text())
         self.assertEqual(argv[argv.index("--model") + 1], "selected-model")
         self.assertEqual(argv[argv.index("--thinking") + 1], "high")
@@ -290,6 +326,8 @@ class MateTests(unittest.TestCase):
         env["TEST_PROVIDER_ERROR"] = "1"
         subprocess.run(command, env=env, cwd=task["worktree"], capture_output=True, check=True, timeout=10)
         self.assertEqual(m.load(self.db, "fix")["state"], "failed")
+        self.assertEqual(m.snapshot(self.db, {})['tasks'][0]['usage_total']['estimated_cost_usd'], 0.25)
+        self.assertEqual(m.snapshot(self.db, {'id': 'fix', 'attempt': 1})['attempt_usage']['messages'], 1)
         argv = json.loads((self.home / "argv.json").read_text())
         self.assertEqual(argv[argv.index("--model") + 1], "selected-model")
         self.assertEqual(argv[argv.index("--thinking") + 1], "high")

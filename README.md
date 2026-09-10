@@ -161,6 +161,31 @@ make that provider part of your OpenAI subscription.
 Worker provider extensions remain unsupported; use a built-in provider or shared
 pi `models.json` configuration available to both supervisor and worker.
 
+## Per-task usage and estimated cost
+
+Worker usage is persisted in the task journal after each finalized assistant message,
+including tool-calling turns and errors with reported usage. Streaming updates are
+not counted repeatedly. Each attempt has separate counters; continuation adds a new
+attempt rather than counting the saved session history again.
+
+- `/mate-status` or `mate_status` includes `usage_total`: input/output tokens,
+  cache-read/cache-write tokens and `estimated_cost_usd` across tracked attempts.
+- `mate_status` with an `id` also includes the task's `usage` map keyed by attempt,
+  and `attempt_usage` for the selected `attempt` (current attempt by default).
+- Estimates sum Pi's reported `usage.cost.total` in USD. Mate does not maintain a
+  separate price table. **For an OpenAI subscription this is not an additional bill
+  or a measurement of subscription quota remaining.** A reported zero may reflect
+  missing/zero catalog pricing; it does not prove the request was free.
+- `estimated_cost_usd: null` means no valid cost has been reported. Compare
+  `token_reported_messages` and `cost_reported_messages` with `messages` to identify
+  partial data. Totals with `untracked_attempts` are also incomplete.
+- Tracking starts with newly launched worker attempts after this update. Existing
+  attempts are not automatically backfilled; unknown historical cost is not zero.
+- Scope is worker assistant-message usage, not supervisor calls, nested tool model
+  calls, or compaction/retries that emit no finalized assistant usage. In-flight
+  requests are not reflected until their final message arrives. This is a usage
+  estimate, not an audited billing ledger. Existing raw logs remain available.
+
 ## Safety and limits
 
 - At most **two active workers**. They share subscription quota with the supervisor.

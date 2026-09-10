@@ -98,6 +98,9 @@ with tempfile.TemporaryDirectory(prefix='mate-tui-') as temporary:
         snapshot = mate.snapshot(db, {'id': 'fixture'})
         assert snapshot['events'][0]['kind'] == 'report'
         assert 'MATE_TUI_REPORT' in snapshot['report']['text']
+        assert snapshot['tasks'][0]['usage_total']['messages'] == 2, 'count finals, not streaming updates'
+        assert snapshot['attempt_usage']['cost_reported_messages'] == 2
+        assert snapshot['attempt_usage']['estimated_cost_usd'] == 0, 'localhost fixture has zero catalog pricing'
         assert any(e['type'] == 'tool_execution_start' and e['toolName'] == 'read' for e in rows), rows
         assert any(e['type'] == 'tool_execution_end' and not e['isError'] for e in rows), rows
         assert rows[-1]['type'] == 'agent_settled', rows[-3:]

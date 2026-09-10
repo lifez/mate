@@ -166,6 +166,12 @@
   "local_changes": [
     {
       "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned worker usage accounting: persist tokens and Pi-reported estimated USD per finalized assistant message and attempt; expose totals/coverage in status, preserve unknown historical costs, no supervisor/billing attribution or new upstream code.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "AGENTS.md"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned human-only /mate-complete command: reviewed-attempt confirmation and worker lock gate, persisted acceptance timestamp/local OS account, idempotent terminal complete state. No automatic ack, cleanup or Git operations; no upstream code copied.",
       "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "AGENTS.md"],
       "local_commit": null
@@ -201,5 +207,5 @@
     "python3 tests/tui-smoke.py",
     "python3 tests/live-smoke.py"
   ],
-  "verification": "11 stdlib checks including completion gates/persistence and TUI argv/pipe separation/missing-settled/forced-kill, extension checks including human-only completion and bridge lifecycle, real Pi + real worker in PTY against localhost fake model, real Herdr/Treehouse + fake Pi passed. Subscription-backed TUI E2E not run."
+  "verification": "12 stdlib checks including usage aggregation/unknowns/persistence and completion gates/persistence and TUI argv/pipe separation/missing-settled/forced-kill, extension checks including human-only completion and bridge lifecycle, real Pi + real worker in PTY against localhost fake model, real Herdr/Treehouse + fake Pi passed. Subscription-backed TUI E2E not run."
 }

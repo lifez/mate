@@ -2,6 +2,7 @@
 """Mate's local control plane. stdlib only; macOS/Linux. No Firstmate runtime imports."""
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -300,6 +301,49 @@ def complete(db, p):
     return task  # No acknowledgement, resource cleanup, or Git operations.
 
 
+def empty_usage():
+    return dict(messages=0, token_reported_messages=0, cost_reported_messages=0,
+                input_tokens=0, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0,
+                estimated_cost_usd=None)
+
+
+def record_usage(db, ident, attempt, message):
+    """Count finalized assistant messages only, never streaming snapshots or replayed sessions."""
+    task = load(db, ident)
+    if task['attempt'] != attempt:
+        raise ValueError('Usage belongs to a stale worker attempt')
+    bucket = task.setdefault('usage', {}).setdefault(str(attempt), empty_usage())
+    bucket['messages'] += 1
+    usage = message.get('usage')
+    if isinstance(usage, dict):
+        fields = dict(input='input_tokens', output='output_tokens', cacheRead='cache_read_tokens', cacheWrite='cache_write_tokens')
+        if all(type(usage.get(key)) is int and usage[key] >= 0 for key in fields):
+            for key, target in fields.items():
+                bucket[target] += usage[key]
+            bucket['token_reported_messages'] += 1
+        cost = usage.get('cost')
+        amount = cost.get('total') if isinstance(cost, dict) else None
+        if type(amount) in (int, float) and math.isfinite(amount) and amount >= 0:
+            bucket['estimated_cost_usd'] = (bucket['estimated_cost_usd'] or 0) + amount
+            bucket['cost_reported_messages'] += 1
+    with db:
+        save(db, task)  # Retain usage even if the worker crashes before its report.
+
+
+def usage_total(task):
+    attempts = task.get('usage', {})
+    total = empty_usage()
+    for bucket in attempts.values():
+        for key in total:
+            if key == 'estimated_cost_usd':
+                if bucket[key] is not None:
+                    total[key] = (total[key] or 0) + bucket[key]
+            else:
+                total[key] += bucket[key]
+    total['untracked_attempts'] = [n for n in range(1, task['attempt'] + 1) if str(n) not in attempts]
+    return total
+
+
 def snapshot(db, p):
     all_tasks = tasks(db)
     start = int(p.get("task_offset", 0))
@@ -323,9 +367,11 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via") if k in t} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via") if k in t} | {"usage_total": usage_total(t)} for t in result["tasks"]]
     else:
-        result["tasks"] = [load(db, p["id"])]
+        task = load(db, p["id"])
+        result["tasks"] = [dict(task, usage_total=usage_total(task))]
+        result["attempt_usage"] = task.get("usage", {}).get(str(attempt))
     return result
 
 
@@ -486,6 +532,7 @@ def worker(ident, attempt):
         if str(Path.cwd().resolve()) != task["worktree"]:
             raise ValueError("Worker cwd differs from its leased worktree")
         task["state"] = "running"
+        task.setdefault("usage", {}).setdefault(str(attempt), empty_usage())
         save(db, task)
     folder = HOME / ident
     session = folder / "session.jsonl"
@@ -530,6 +577,7 @@ def worker(ident, attempt):
                     continue
                 if item.get("type") == "message_end" and item.get("message", {}).get("role") == "assistant":
                     last = item["message"]
+                    record_usage(db, ident, attempt, last)
                 if item.get("type") == "agent_settled":
                     settled = True
                 elif item.get("type") == "agent_start":
