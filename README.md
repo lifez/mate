@@ -19,8 +19,8 @@ Mate's tools and auto-wake are not active.
 
 Use `/login` → OpenAI Codex if needed, then `/model` to select your subscription
 model. Existing pi authentication is reused; Mate does not store/copy credentials.
-Workers inherit the supervisor's model/provider and thinking effort at dispatch,
-unless you request per-task overrides (see below).
+Workers use the defaults in `mate.config.json`, unless you request per-task
+overrides (see below). The supervisor's model is independent.
 
 Example request:
 
@@ -78,7 +78,30 @@ no thinking suppression, global tool patches or boat animation. Hidden custom
 messages may leave a blank spacer. Use `/calm off` before `/export` or `/share`
 if you want full rendered orchestration history; raw session content is retained.
 
-## Per-task model and effort
+## Worker defaults and per-task overrides
+
+Edit `mate.config.json` in the Mate repository (not the worker's repository):
+
+```json
+{
+  "worker": {
+    "model": "openai-codex/gpt-5.6-luna",
+    "effort": "xhigh"
+  }
+}
+```
+
+New dispatches read this file each time; no restart is needed after config edits.
+Precedence per field is **task override → worker config → supervisor setting**.
+Use `provider/model-id` to keep the default independent of the supervisor's provider.
+A bare ID uses the supervisor's provider. Use `{}` to inherit both supervisor settings.
+Missing/unreadable/invalid config fails dispatch instead of silently falling back.
+Unknown models or unsupported configured effort also fail before worker launch;
+when overriding to a model without `xhigh`, explicitly override effort too.
+
+This file is tracked for easy sharing. Keep credentials out of it; authentication
+still comes from pi. Config changes do not alter existing tasks or continuation:
+those retain their saved profiles unless explicitly overridden.
 
 Ask naturally, for example: “Delegate this with model `<model-id>` and effort `high`.”
 The supervisor passes optional `model` and `effort` to `mate_dispatch`:
@@ -92,11 +115,13 @@ supervisor's provider; `provider/model-id` explicitly selects another provider.
 Selecting another provider may require separate credentials/billing—it does not
 make that provider part of your OpenAI subscription.
 
-- Omitted values inherit the supervisor's current settings on initial dispatch.
+- Omitted values use `mate.config.json` worker defaults first, then the supervisor's
+  current settings on initial dispatch.
 - Effort maps to pi's `--thinking`: `off`, `minimal`, `low`, `medium`, `high`,
   `xhigh`, `max`. Explicit unsupported levels or unknown models fail before launch.
-- When changing model without specifying effort, inherited effort is clamped using
-  pi's supported-level rules; `mate_status` shows the resolved, saved profile.
+- Configured or per-task effort is validated strictly. Only effort inherited from
+  the supervisor is clamped using pi's supported-level rules; `mate_status` shows
+  the resolved, saved profile.
 - `mate_continue` accepts the same overrides. Otherwise it keeps the task's saved
   model/effort, even if you change the supervisor's settings or restart Mate. A bare
   model ID on continuation uses the task's provider. It reuses the worktree/session.

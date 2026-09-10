@@ -18,6 +18,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Two-worker limit, stopped-worker continuation, stalled alerts และ fail-closed recovery
 - Mate-owned change: per-task model/effort overrides ใน dispatch/continue; validate ผ่าน Pi catalog/capabilities,
   persist resolved profile และส่ง effort เป็น `--thinking` โดยไม่เปลี่ยน supervisor model หรือ approved base
+- Mate-owned config: `mate.config.json` กำหนด worker model/effort default แยกจากตัวหลัก;
+  อ่านทุก new dispatch, task override มาก่อน config, continue เก็บ profile เดิม
+  (ไม่ import upstream เพิ่ม; tests ตรวจ config validation/precedence/reload)
 - ยังไม่ทำ automatic cleanup, PR/merge/deploy, remote, multi-harness หรือ supervisor ย่อย
 - Ambiguous launch/crash เก็บสถานะ attention ให้ตรวจ ไม่เสี่ยง auto-relaunch
 - ผ่าน local checks และ real Herdr/Treehouse smoke ด้วย fake pi; **ยังไม่ได้ทดสอบกับโมเดล OpenAI จริง**

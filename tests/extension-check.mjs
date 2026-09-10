@@ -14,7 +14,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-ai': join(installed, 'node_modules/@earendil-works/pi-ai/dist/index.js'),
   '@earendil-works/pi-tui': join(installed, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
-const { default: factory, workerProfile } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
+const { default: factory, workerProfile, dispatchProfile } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
 const tmp = mkdtempSync(join(tmpdir(), 'mate-extension-'));
 process.env.MATE_HOME = join(tmp, 'home');
 const repo = join(tmp, 'repo'); mkdirSync(repo);
@@ -59,6 +59,33 @@ try {
   assert.throws(() => workerProfile(ctx, { model: 'unknown' }), /Unknown model/);
   assert.throws(() => workerProfile(ctx, { effort: 'max' }), /unsupported/);
   assert.throws(() => workerProfile(ctx, { model: 'other/vendor/model', effort: 'high' }), /unsupported/);
+  const configPath = join(tmp, 'mate.config.json');
+  const configure = data => writeFileSync(configPath, JSON.stringify(data));
+  configure({ worker: { model: 'openai-codex/worker-model', effort: 'xhigh' } });
+  assert.deepEqual(dispatchProfile(ctx, {}, configPath), { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
+  assert.deepEqual(dispatchProfile(ctx, { effort: 'low' }, configPath), { provider: 'openai-codex', model: 'worker-model', effort: 'low' });
+  assert.deepEqual(dispatchProfile(ctx, { model: 'main-model', effort: 'high' }, configPath), { provider: 'openai-codex', model: 'main-model', effort: 'high' });
+  assert.throws(() => dispatchProfile(ctx, { model: 'other/vendor/model' }, configPath), /unsupported/, 'configured effort must not silently downgrade');
+  configure({ worker: { effort: 'low' } });
+  assert.deepEqual(dispatchProfile(ctx, {}, configPath), { provider: 'openai-codex', model: 'main-model', effort: 'low' }, 'config reread without reload');
+  configure({});
+  assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}));
+  for (const invalid of [null, [], { workers: {} }, { worker: null }, { worker: [] },
+    { worker: { model: 1 } }, { worker: { model: ' ' } }, { worker: { effort: 'ultra' } }, { worker: { typo: true } }]) {
+    configure(invalid);
+    assert.throws(() => dispatchProfile(ctx, {}, configPath), /Invalid/);
+  }
+  configure({ worker: { model: 'unknown' } });
+  assert.throws(() => dispatchProfile(ctx, {}, configPath), /Unknown model/);
+  writeFileSync(configPath, '{');
+  assert.throws(() => dispatchProfile(ctx, {}, configPath), /Cannot read/);
+  rmSync(configPath);
+  assert.throws(() => dispatchProfile(ctx, {}, configPath), /Cannot read/);
+  // Check the shipped config with a mock catalog; runtime uses Pi's actual registry.
+  const luna = { provider: 'openai-codex', id: 'gpt-5.6-luna', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } };
+  assert.deepEqual(dispatchProfile({ ...ctx, modelRegistry: { find: (provider, id) =>
+    provider === luna.provider && id === luna.id ? luna : undefined } }, {}),
+    { provider: 'openai-codex', model: 'gpt-5.6-luna', effort: 'xhigh' });
   await handlers.session_start({}, ctx);
   await wait(() => call('mate_status'));
 
@@ -159,7 +186,7 @@ try {
   const stopped = messages.length;
   await sleep(2100);
   assert.equal(messages.length, stopped, 'shutdown does not re-arm');
-  console.log('PASS: Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval, follow-up wake, dedup, restart replay, ack, shutdown');
+  console.log('PASS: worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval, follow-up wake, dedup, restart replay, ack, shutdown');
 } finally {
   await handlers.session_shutdown();
   rmSync(tmp, { recursive: true, force: true });

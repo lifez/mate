@@ -165,6 +165,12 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R06"],
+      "description": "Mate-owned mate.config.json worker model/effort defaults read on new dispatch; strict validation, task override precedence, unchanged saved continuation profiles. No new upstream code imported; initial snapshots preserved.",
+      "paths": ["mate.config.json", ".pi/extensions/mate-supervisor.ts", "AGENTS.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R06"],
       "description": "Per-task model/effort overrides for dispatch and continuation; resolve against Pi model capabilities, persist selected profile, pass --thinking to worker CLI. Initial SHA-256 snapshots remain unchanged for comparison.",
       "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "AGENTS.md"],
