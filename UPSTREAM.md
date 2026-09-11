@@ -11,6 +11,13 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned wake handling correction: explicit approval/report actions in the
+  shared durable wake, one unacknowledged-event reminder after `agent_settled` per
+  session generation, then a separate persistent UNHANDLED footer. No direct
+  launch/retry, schema change or upstream baseline change; acknowledgement is not
+  semantic verification. Regression uses the disposable real control plane with
+  mocked Pi lifecycle, including two reports plus approval and bounded correction.
+
 - Mate-owned `/mate-complete ID --force`: human acceptance also permits stopped
   failed tasks; reuse lock, original pane/process and lease checks, preserve scope
   gates and failed-run evidence, record override/source state and keep tab closure

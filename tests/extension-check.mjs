@@ -33,7 +33,9 @@ const models = [
   { provider: 'openai-codex', id: 'worker-model', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } },
   { provider: 'other', id: 'vendor/model', reasoning: false },
 ];
+let supervisorIdle = true, supervisorQueued = false;
 const ctx = { mode: 'tui', hasUI: true, model: models[0], thinkingLevel: 'high',
+  isIdle: () => supervisorIdle, hasPendingMessages: () => supervisorQueued,
   modelRegistry: { find: (provider, id) => models.find(m => m.provider === provider && m.id === id) },
   ui: { notify: (...args) => notices.push(args), setStatus(key, value) { statuses[key] = value; }, confirm: async title => title === 'Close worker Herdr tab too?' ? closeApproval : approval,
     getToolsExpanded: () => expanded, setToolsExpanded: value => { expanded = value; } } };
@@ -278,7 +280,51 @@ try {
   assert.equal(scoped.state, 'review', 'approval does not dispatch or launch');
   assert.equal(scoped.scope_history.length, 1);
   assert.equal(scoped.original_brief, initialScope);
-  assert.ok((await call('mate_status')).events.some(e => e.kind.startsWith('scope-approved-')));
+  const approvalEvent = (await call('mate_status')).events.find(e => e.kind.startsWith('scope-approved-'));
+  assert.ok(approvalEvent);
+  await wait(() => messages.some(m => m.message.details?.events.some(e => e.id === approvalEvent.id)));
+  assert.match(messages.at(-1).message.content, /call mate_continue in this turn/);
+  // Reproduce the incident: two report wakes arrive, model repeats its old launch reply.
+  execFileSync('python3', ['-c', `import sqlite3,os\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nc.executemany("INSERT INTO events(task,attempt,kind,note) VALUES (?,1,'report','fixture report ready')", [('inspect',),('second',)])\nc.commit()`]);
+  await wait(() => messages.some(m => m.message.details?.events.some(e => e.task === 'second')));
+  assert.match(messages.at(-1).message.content, /A report supersedes an old launching update/);
+  const beforeCorrection = messages.length;
+  assert.equal(handlers.agent_end, undefined, 'no correction during low-level retry/compaction');
+  supervisorIdle = false;
+  handlers.agent_settled({}, ctx);
+  supervisorIdle = true; supervisorQueued = true;
+  handlers.agent_settled({}, ctx);
+  await sleep(2300);
+  assert.equal(messages.length, beforeCorrection, 'busy/queued runs are not corrected');
+  supervisorQueued = false;
+  handlers.agent_settled({}, ctx);
+  await wait(() => messages.length > beforeCorrection);
+  assert.match(messages.at(-1).message.content, /CORRECTION:/);
+  assert.equal(messages.at(-1).options.deliverAs, 'followUp');
+  assert.equal(messages.at(-1).message.details.events.length, 3, 'both reports and approval retained');
+  let correctedCount = messages.length;
+  handlers.agent_settled({}, ctx);
+  await sleep(2300);
+  assert.equal(messages.length, correctedCount, 'only one corrective turn per event');
+  assert.match(statuses['mate-unhandled'], /UNHANDLED:.*inspect.*second/);
+  assert.match(messages.at(-1).message.content, /do not launch again/);
+  assert.match(messages.at(-1).message.content, /do not retry without resolving/);
+  await handlers.session_shutdown();
+  handlers.agent_settled({}, ctx); // A stale callback must not re-arm the old generation.
+  await sleep(100);
+  assert.equal(messages.length, correctedCount);
+  await handlers.session_start({}, ctx);
+  await wait(() => messages.length > correctedCount);
+  assert.doesNotMatch(messages.at(-1).message.content, /CORRECTION:/, 'restart first replays normally');
+  correctedCount = messages.length;
+  handlers.agent_settled({}, ctx);
+  await wait(() => messages.length > correctedCount);
+  assert.match(messages.at(-1).message.content, /CORRECTION:/, 'new generation has one reminder budget');
+  correctedCount = messages.length;
+  await call('mate_ack', { events: (await call('mate_status')).events.map(e => e.id), note: 'Relayed disposable fixture outcomes and scope blocker; no launch.' });
+  handlers.agent_settled({}, ctx);
+  await wait(() => statuses['mate-unhandled'] === undefined);
+  assert.equal(messages.length, correctedCount, 'ack suppresses correction');
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal(notices.at(-1)[1], 'error', 'cannot accept an unexecuted scope addition');
   // Simulate a finished continuation in this disposable fixture, without Herdr or a model.

@@ -474,8 +474,15 @@ alert per attempt, without being interrupted or declared failed. Set
 `MATE_STALE_SECONDS` (minimum 30) to tune this for long local checks.
 
 Events are delivered as follow-ups, so they do not interrupt an active conversation.
-They are delivered once per session generation and retained until `mate_ack` records
-how they were handled. `/new`, `/resume`, `/reload` or restarting Mate replays pending
+Approval wakes explicitly require current-state inspection and continuation or a
+concrete blocker; report wakes require reading and summarizing the report instead
+of repeating an old launching update. Events remain until `mate_ack` records handling.
+After Pi fully settles (including retries, compaction and queued messages), delivered
+but unacknowledged events receive **one corrective follow-up per session generation**.
+If still unhandled, a separate `UNHANDLED` footer names them until acknowledgement;
+there is no infinite model retry loop. This checks acknowledgement, not the semantic
+correctness of a model's summary or handling note. Corrections never launch workers
+directly: the supervisor must recheck current scope/attempt and obey launch refusals. `/new`, `/resume`, `/reload` or restarting Mate replays pending
 events. Delivery is **at least once**, not exactly once; dispatch IDs and state gates
 prevent automatic duplicate acquisition. No model calls are made just to wait.
 

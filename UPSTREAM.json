@@ -166,6 +166,12 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R06"],
+      "description": "Mate-owned explicit approval/report wake actions and one corrective follow-up for delivered unacknowledged events after agent_settled per generation, then persistent UNHANDLED footer. No direct launch/retry or schema change; acknowledgement is not semantic verification. No upstream import or provenance baseline change.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "tests/extension-check.mjs", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned human-only /mate-complete ID --force permits stopped failed tasks after original pane/process and exact lease checks under worker lock. Preserve scope/attempt gates, error/reports/events/usage; record completed_via and completed_from, retain separately confirmed tab closure. No upstream import or provenance baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
