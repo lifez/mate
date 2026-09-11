@@ -208,8 +208,8 @@ make that provider part of your OpenAI subscription.
 - Legacy tasks with no saved effort retain their old CLI behavior while running;
   their next continuation starts from `off`, clamped to the selected model's support.
 
-Worker provider extensions remain unsupported; use a built-in provider or shared
-pi `models.json` configuration available to both supervisor and worker.
+Custom providers must be available to both the supervisor's model registry (for
+profile validation) and the worker; worker-only provider registration is insufficient.
 
 ## Per-task usage and estimated cost
 
@@ -251,10 +251,15 @@ attempt rather than counting the saved session history again.
   changes, not filesystem/network permissions. The worker no-push/no-deploy rules
   are instructions, not an OS-enforced security boundary. Approve only repositories
   and briefs you trust; Treehouse may run repository setup hooks.
-- Worker extension discovery/skills remain disabled; only the explicit Mate event
-  bridge loads. Project context instructions still load. Custom provider extensions
-  are not supported. Do not switch/fork sessions in a running delegated worker;
-  send follow-up scope through the supervisor.
+- Workers load global and worktree-project skills/extensions using normal Pi discovery
+  and configured resource filters, plus the explicit Mate event bridge. Worker launches
+  use `--approve` to trust project resources for that run (including project settings,
+  packages and executable extensions); approve only repositories/resources you trust.
+  The Pi child uses `MATE_MODE=dev` to suppress Mate supervisor registration only;
+  `WORKER.md` still defines its delegated role. Prompt template discovery remains off.
+  Changes apply on the next launch/continuation, not to already-running workers.
+  Do not switch/fork sessions in a running delegated worker; send follow-up scope
+  through the supervisor.
 - A hard crash during lease/pane creation is **attention**, not an invitation to
   retry. The journal and any lease receipt are retained. No automatic re-acquire,
   process killing, or destructive rollback attempts to guess what happened.

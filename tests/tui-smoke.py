@@ -18,11 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Model(BaseHTTPRequestHandler):
+    requests = []
     def log_message(self, *_):
         pass
 
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        self.requests.append(request)
         has_result = any(m['role'] == 'tool' for m in request['messages'])
         delta = {'content': 'MATE_TUI_REPORT: fixture read complete.'} if has_result else {
             'tool_calls': [{'index': 0, 'id': 'fixture-read', 'type': 'function',
@@ -42,6 +44,17 @@ with tempfile.TemporaryDirectory(prefix='mate-tui-') as temporary:
     folder = Path(temporary)
     agent = folder / 'agent'; agent.mkdir()
     (folder / 'fixture.txt').write_text('MATE_TUI_TOOL_RESULT\n')
+    for scope, resources in [('global', agent), ('project', folder / '.pi')]:
+        extensions = resources / 'extensions'; extensions.mkdir(parents=True)
+        (extensions / 'fixture.ts').write_text(
+            'import { writeFileSync } from "node:fs";\n'
+            'export default function () {\n'
+            'if (process.env.MATE_MODE !== "dev") throw new Error("Supervisor not disabled");\n'
+            f'writeFileSync({json.dumps(str(folder / (scope + "-loaded")))}, "loaded");\n'
+            '}\n')
+        skill = resources / 'skills' / (scope + '-fixture'); skill.mkdir(parents=True)
+        (skill / 'SKILL.md').write_text(
+            f'---\nname: {scope}-fixture\ndescription: MATE_{scope.upper()}_SKILL\n---\nFixture only.\n')
     server = ThreadingHTTPServer(('127.0.0.1', 0), Model)
     (agent / 'models.json').write_text(json.dumps({'providers': {'mate-fixture': {
         'baseUrl': f'http://127.0.0.1:{server.server_port}/v1', 'api': 'openai-completions',
@@ -104,6 +117,9 @@ with tempfile.TemporaryDirectory(prefix='mate-tui-') as temporary:
         assert any(e['type'] == 'tool_execution_start' and e['toolName'] == 'read' for e in rows), rows
         assert any(e['type'] == 'tool_execution_end' and not e['isError'] for e in rows), rows
         assert rows[-1]['type'] == 'agent_settled', rows[-3:]
+        for scope in ('global', 'project'):
+            assert (folder / (scope + '-loaded')).is_file(), scope + ' extension missing'
+            assert 'MATE_' + scope.upper() + '_SKILL' in json.dumps(Model.requests), scope + ' skill missing'
         assert b'MATE_TUI_REPORT' in output, output.decode(errors='replace')[-4000:]
         assert b'fixture.txt' in output, 'native tool row missing from TTY'
         assert b'MATE_TUI_TOOL_RESULT' in events, 'tool result missing from bridge'

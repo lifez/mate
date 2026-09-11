@@ -166,6 +166,12 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R04"],
+      "description": "Enable normal global/project worker skill and extension discovery, trust project resources per run with --approve, and reuse MATE_MODE=dev in the Pi child to suppress nested Mate supervisor registration. Preserve explicit event bridge and disabled prompt templates. No upstream import or baseline change.",
+      "paths": ["bin/mate.py", "tests/test_mate.py", "tests/tui-smoke.py", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R06"],
       "description": "Mate-owned development mode: MATE_MODE=dev bypasses supervisor registration entirely. Move the existing runtime policy from AGENTS.md to SUPERVISOR.md and make AGENTS.md development guidance. Preserve original policy snapshot/lineage; no new upstream import.",
       "paths": [".pi/extensions/mate-supervisor.ts", "AGENTS.md", "SUPERVISOR.md"],

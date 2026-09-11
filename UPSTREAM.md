@@ -32,6 +32,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Mate-owned config: `mate.config.json` กำหนด worker model/effort default แยกจากตัวหลัก;
   อ่านทุก new dispatch, task override มาก่อน config, continue เก็บ profile เดิม
   (ไม่ import upstream เพิ่ม; tests ตรวจ config validation/precedence/reload)
+- Mate-owned worker discovery: โหลด global/project skills/extensions ตาม Pi settings,
+  trust project ต่อ run ด้วย `--approve`, ใช้ `MATE_MODE=dev` เฉพาะ Pi child กัน supervisor ซ้อน;
+  คง explicit event bridge และปิด prompt templates (ไม่มี upstream import เพิ่ม)
 - Worker ใช้ native pi TUI + Mate-owned event bridge ผ่าน pipe แยก; จบ attempt
   เมื่อ `agent_settled` แล้ว graceful exit, เก็บ report/wake เหมือนเดิม
 - ยังไม่ทำ automatic cleanup, PR/merge/deploy, remote, multi-harness หรือ supervisor ย่อย

@@ -583,9 +583,9 @@ def worker(ident, attempt):
     session = folder / "session.jsonl"
     prompt = task.get("followup", task["brief"])
     policy = (ROOT / "WORKER.md").read_text()
-    args = [task["pi_binary"], "--tui-mode", "regular", "--no-extensions", "--no-skills", "--no-prompt-templates",
+    args = [task["pi_binary"], "--tui-mode", "regular", "--no-prompt-templates",
             "-e", str(ROOT / "bin/worker-events.ts"),
-            "--no-approve", "--provider", task["provider"], "--model", task["model"],
+            "--approve", "--provider", task["provider"], "--model", task["model"],
             "--session", str(session), "--append-system-prompt", policy]
     if "effort" in task:  # Legacy in-flight tasks keep their existing CLI/session defaults.
         args += ["--thinking", worker_profile(task)["effort"]]
@@ -602,7 +602,8 @@ def worker(ident, attempt):
         with os.fdopen(read_fd) as stream, (folder / f"events-{attempt}.jsonl").open("w") as log, (folder / f"stderr-{attempt}.log").open("w") as err:
             try:
                 child = subprocess.Popen(args, cwd=task["worktree"], stderr=err,
-                                         env=dict(os.environ, MATE_EVENT_FD=str(write_fd)), pass_fds=(write_fd,))
+                                         # Reuse Mate's no-supervisor mode; other extensions/skills still load.
+                                         env=dict(os.environ, MATE_MODE="dev", MATE_EVENT_FD=str(write_fd)), pass_fds=(write_fd,))
             finally:
                 os.close(write_fd)
             def stop(_sig, _frame):
