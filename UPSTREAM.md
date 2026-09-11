@@ -11,6 +11,11 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Local config packaging: track `mate.config.example.json` instead of personal
+  `mate.config.json`; keep local config ignored, document setup/schema in
+  `CONFIGURATION.md`, and isolate smoke-test config. No runtime fallback or upstream
+  baseline changes; existing provenance entries remain historical records.
+
 - Mate-owned per-project `base_branch` + startup config: exact resolved repo matching,
   mandatory configured branch → human-approved pinned SHA, no fetch/repin; setup argv
   runs once after checkout/before worker, private output and fail-closed recovery.

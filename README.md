@@ -45,8 +45,14 @@ Inside a Herdr pane:
 
 ```sh
 cd /Users/win/mine/mate
+test -e mate.config.json || cp mate.config.example.json mate.config.json
+chmod 600 mate.config.json
+# Edit mate.config.json for your local models and projects before starting.
 pi
 ```
+
+See [CONFIGURATION.md](CONFIGURATION.md) for all config fields, examples, validation,
+startup behavior and upgrading from versions that tracked the real config.
 
 Approve pi's project trust prompt on first launch so
 `.pi/extensions/mate-supervisor.ts` loads automatically. Without project trust,
@@ -177,8 +183,8 @@ Missing/unreadable/invalid config fails dispatch instead of silently falling bac
 Unknown models or unsupported configured effort also fail before worker launch;
 when overriding to a model without `xhigh`, explicitly override effort too.
 
-This file is tracked for easy sharing. Keep credentials out of it; authentication
-still comes from pi. Config changes do not alter existing tasks or continuation:
+This file is local-only and Git-ignored; share `mate.config.example.json` instead.
+Keep credentials out of both files; authentication still comes from pi. Config changes do not alter existing tasks or continuation:
 those retain their saved profiles unless explicitly overridden.
 
 Ask naturally, for example: “Delegate this with model `<model-id>` and effort `high`.”
@@ -213,8 +219,8 @@ profile validation) and the worker; worker-only provider registration is insuffi
 
 ## Per-project base branch and startup
 
-Add `projects` beside `worker` in Mate's `mate.config.json` (shipped as `{}`;
-no project commands run until you explicitly configure them):
+Add `projects` beside `worker` in your local `mate.config.json` (the example ships
+with `projects: {}`; no project commands run until you explicitly configure them):
 
 ```json
 {

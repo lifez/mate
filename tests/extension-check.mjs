@@ -1,12 +1,19 @@
 // Real Python control plane + mocked Pi UI/model. No model calls or live workers.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync, openSync, closeSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync, openSync, closeSync, existsSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const tmp = mkdtempSync(join(tmpdir(), 'mate-extension-'));
+const root = join(tmp, 'mate');
+// Run the real extension/control plane from a disposable installation, never personal config.
+for (const path of ['.pi/extensions', 'bin', 'SUPERVISOR.md', 'WORKER.md']) {
+  cpSync(join(sourceRoot, path), join(root, path), { recursive: true });
+}
+cpSync(join(sourceRoot, 'mate.config.example.json'), join(root, 'mate.config.json'));
 const installed = join(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim(), '@earendil-works/pi-coding-agent');
 const { createJiti } = await import(pathToFileURL(join(installed, 'node_modules/jiti/lib/jiti.mjs')).href);
 const jiti = createJiti(import.meta.url, { alias: {
@@ -15,7 +22,6 @@ const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-tui': join(installed, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
 const { default: factory, workerProfile, dispatchProfile } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
-const tmp = mkdtempSync(join(tmpdir(), 'mate-extension-'));
 process.env.MATE_HOME = join(tmp, 'home');
 const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -121,11 +127,15 @@ try {
   assert.throws(() => dispatchProfile(ctx, {}, configPath), /Cannot read/);
   rmSync(configPath);
   assert.throws(() => dispatchProfile(ctx, {}, configPath), /Cannot read/);
-  // Check the shipped config with a mock catalog; runtime uses Pi's actual registry.
+  // Check the copied example config with a mock catalog; no personal config is read.
   const luna = { provider: 'openai-codex', id: 'gpt-5.6-luna', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } };
   assert.deepEqual(dispatchProfile({ ...ctx, modelRegistry: { find: (provider, id) =>
     provider === luna.provider && id === luna.id ? luna : undefined } }, {}),
     { provider: 'openai-codex', model: 'gpt-5.6-luna', effort: 'xhigh' });
+  cpSync(join(sourceRoot, 'mate.config.example.json'), join(root, 'mate.config.example.json'));
+  rmSync(join(root, 'mate.config.json'));
+  assert.throws(() => dispatchProfile(ctx, {}), /Cannot read/, 'missing local config must not fall back to example');
+  cpSync(join(root, 'mate.config.example.json'), join(root, 'mate.config.json'));
   await handlers.session_start({}, ctx);
   await wait(() => call('mate_status'));
 

@@ -74,6 +74,8 @@ try:
     os.environ.update(env)
     spec = importlib.util.spec_from_file_location("mate", ROOT / "bin/mate.py")
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    m.CONFIG = folder / "mate.config.json"
+    m.CONFIG.write_text('{}')  # Disposable config, independent of local installation.
     db = m.connect()
     task = m.propose(db, dict(id="smoke", repo=str(repo), base="main", brief="Read-only fixture test; no network or code changes."))
     m.approve(db, dict(id="smoke", sha=task["sha"]))  # Test-only synthetic approval.

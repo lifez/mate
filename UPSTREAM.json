@@ -166,6 +166,12 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R06"],
+      "description": "Local config packaging: untrack and ignore mate.config.json, ship mate.config.example.json and CONFIGURATION.md, isolate smoke-test config from personal settings. Runtime still requires explicit local config; historical ledger paths and provenance snapshots preserved. No new upstream import.",
+      "paths": [".gitignore", "mate.config.example.json", "CONFIGURATION.md", "README.md", "tests/extension-check.mjs", "tests/live-smoke.py"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R04", "R06"],
       "description": "Mate-owned per-project base_branch/startup config: canonical repo matching, enforced local/remote-tracking branch policy with human SHA pinning, once-only bounded startup before worker launch, private logs and fail-closed recovery. No new upstream import; initial provenance snapshots unchanged. 20 Python tests, extension check and localhost fake-model TUI smoke passed.",
       "paths": ["mate.config.json", "bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "examples/copy-env.py"],
