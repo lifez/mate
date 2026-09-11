@@ -97,6 +97,7 @@ Code verification/research/review must themselves be delegated.
 - `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
 - `/mate-status` — show tasks/events without invoking a model.
 - `/mate-complete ID [--force]` — accept a stopped `review` task (`--force` also permits `failed`), then optionally confirm closing its worker tab.
+- `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
@@ -179,6 +180,29 @@ After installing the change, reload/restart the supervisor **with workers stoppe
 to load both the new tool and control plane. Existing tasks need no database migration;
 back up stopped state before use and do not downgrade while additions are pending.
 
+## Cancelling an unstarted task
+
+`/mate-cancel ID` is a human-only command; cancellation is not a model tool or an
+arbitrary shell operation. It accepts only `awaiting-base`/`approved` tasks at
+attempt 0 with no saved execution evidence, or the initial pre-receipt `attention`
+shape. The latter is inspected under the supervisor and task locks: saved holder,
+branch, artifact directory, wrapper lock, Treehouse `status --json`, Herdr task
+workspace and relevant process evidence must all be readable and show no match.
+A missing lease receipt is not proof of absence, so the human must attest to the
+external orphan inspection in the confirmation dialog. Saved leases, worktrees,
+startup/endpoint receipts, usage, follow-ups, branches, artifacts, matching
+holders/tabs/processes, malformed or unavailable inspection, busy locks, and later
+phase states refuse without changing the task. A saved `same_tab_as` target is only
+placement intent and is retained; any created-pane receipt (`pane` for a split or
+`root_pane` for a new tab), or uncertain split after acquisition, blocks cancellation.
+
+Cancellation records `state: cancelled`, local human/time/via audit and a durable
+`cancelled` event. It preserves the approved SHA/profile/scope, receipts, attempts,
+reports, usage, events and acknowledgements; it does not acknowledge events, fake a
+report or completion, launch/retry, clean up resources, or return a lease. Repeating
+cancellation is idempotent and preserves the original audit. Cancelled tasks are
+excluded from open counts and cannot dispatch, continue, extend, complete or close.
+
 ## Accepting a completed task
 
 After reviewing the report and any required verification, run `/mate-complete ID`.
@@ -219,8 +243,8 @@ records remain. Missing tabs or validation errors do not undo task completion.
 Closure is journaled before the external operation. A lost/ambiguous response leaves
 `tab_close_state` as `closing`/`uncertain` and requires manual inspection, not automatic
 retry. Successful closure records `tab_closed_at`/`tab_closed_by`; repeats are no-ops.
-The footer counts only open (not `complete`) tasks, across all task pages.
-Completed tasks remain visible in `/mate-status` and cannot continue or reopen in this version;
+The footer counts only open (not `complete` or `cancelled`) tasks, across all task pages.
+Completed and cancelled tasks remain visible in `/mate-status` and cannot continue or reopen in this version;
 propose a new task if needed.
 
 ## Calm mode

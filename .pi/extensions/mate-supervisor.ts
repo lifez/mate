@@ -295,6 +295,32 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Worker tab closed; worktree and reports retained", "info");
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
+  pi.registerCommand("mate-cancel", { description: "Human-only cancellation of an unstarted task: /mate-cancel TASK_ID",
+    handler: async (args, ctx) => {
+      try {
+        if (ctx.mode !== "tui") throw new Error("Human TUI confirmation required");
+        const inspection = await rpc("inspect_cancel", { id: args.trim() });
+        if (inspection.already_cancelled) {
+          ctx.ui.notify(`${args.trim()} is already cancelled; original cancellation audit retained`, "info");
+          return;
+        }
+        const task = inspection.task;
+        const checks = inspection.checks.join("\n- ");
+        const attestation = inspection.requires_external_attestation
+          ? "\n\nNo lease receipt proves absence. I have personally inspected the saved holder, Treehouse, task branch/artifacts, wrapper lock, Herdr workspace and possible task/setup/session processes for external orphans."
+          : "";
+        const yes = await ctx.ui.confirm("Cancel this task?",
+          `${task.id} · state ${task.state} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nRead-only preflight:\n- ${checks}${attestation}\n\nThis records human cancellation as distinct from completion. It preserves approval, SHA, scope, receipts, attempts, reports, usage, events and acknowledgements. It does not launch, retry, clean up or fake completion.`);
+        if (!yes) { ctx.ui.notify("Not cancelled; task and evidence unchanged", "info"); return; }
+        const cancelled = await rpc("cancel", { id: task.id, state: task.state, attempt: task.attempt,
+          sha: task.sha, confirmation: inspection.confirmation, confirmed: true,
+          attest_external: inspection.requires_external_attestation });
+        pi.sendMessage({ customType: "mate-cancelled", display: true,
+          content: `Human cancelled ${cancelled.id} from ${task.state}. History and evidence retained; no cleanup, launch or completion was performed.` },
+          { triggerTurn: false });
+        ctx.ui.notify(`${cancelled.id} cancelled; history and evidence retained`, "info");
+      } catch (error) { ctx.ui.notify(String(error), "error"); }
+    } });
   pi.registerCommand("mate-status", { description: "Show local tasks without using model quota",
     handler: async (_args, ctx) => { try { ctx.ui.notify(JSON.stringify(await rpc("status"), null, 2), "info"); } catch (error) { ctx.ui.notify(String(error), "error"); } } });
   pi.registerCommand("mate-wake", { description: "Replay pending durable events", handler: async () => { delivered.clear(); await poll(generation); } });

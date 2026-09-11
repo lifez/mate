@@ -2,6 +2,7 @@
 """Mate's local control plane. stdlib only; macOS/Linux. No Firstmate runtime imports."""
 from contextlib import closing
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -356,6 +357,8 @@ def worker_profile(p, previous=None):
 
 def dispatch(db, p):
     task = load(db, p["id"])
+    if task["state"] == "cancelled":
+        raise ValueError("Cancelled task cannot be dispatched")
     if task["state"] != "approved":
         return task  # Never re-acquire after an interrupted/ambiguous operation.
     profile = worker_profile({}, task) if task.get("recoveries") else worker_profile(p)
@@ -460,6 +463,237 @@ def dispatch(db, p):
                 event(db, task, "launch-uncertain", str(exc))
         raise
     return load(db, task["id"])
+
+
+CANCELLATION_EXECUTION_FIELDS = (
+    "lease", "worktree", "startup_state", "startup_started_at", "startup_finished_at",
+    "startup_pid", "startup_exit_code", "endpoint_receipt", "pane", "tab", "session",
+    "socket", "workspace", "pi_binary", "holder", "usage", "followup", "error",
+    "missing_from", "recoveries", "launch_recoveries")
+
+
+def cancellation_fingerprint(task):
+    return hashlib.sha256(json.dumps(task, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def cancellation_folder(task, required):
+    folder = HOME / task["id"]
+    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
+        raise ValueError("Task artifact directory is malformed; cancellation refused")
+    if not folder.exists():
+        if required:
+            raise ValueError("Task artifact directory is missing; cancellation refused")
+        return folder
+    children = list(folder.iterdir())
+    for child in children:
+        if child.name != "run.lock" or child.is_symlink() or not child.is_file():
+            raise ValueError("Task has execution artifacts; cancellation refused")
+    return folder
+
+
+def cancellation_git_checks(task):
+    repo = Path(task.get("repo", ""))
+    branch = task.get("branch")
+    sha = task.get("sha")
+    if not repo.is_absolute() or not repo.is_dir() or str(repo.resolve()) != task.get("repo"):
+        raise ValueError("Task repository identity is malformed; cancellation refused")
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Approved SHA is malformed; cancellation refused")
+    if not isinstance(branch, str) or not branch or branch.startswith("-") or any(c.isspace() for c in branch):
+        raise ValueError("Task branch is malformed; cancellation refused")
+    try:
+        git(repo, "check-ref-format", "refs/heads/" + branch)
+        if git(repo, "rev-parse", "--show-toplevel") != str(repo):
+            raise ValueError("Task repository identity is uncertain; cancellation refused")
+    except (RuntimeError, ValueError):
+        raise ValueError("Task repository or branch inspection failed; cancellation refused") from None
+    if git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/" + branch):
+        raise ValueError("Task branch already exists; cancellation refused")
+
+
+def cancellation_treehouse_checks(task):
+    try:
+        rows = json.loads(run(["treehouse", "status", "--json"], cwd=task["repo"]))
+    except (RuntimeError, json.JSONDecodeError, TypeError):
+        raise ValueError("Treehouse status is unavailable or malformed; cancellation refused") from None
+    if not isinstance(rows, list):
+        raise ValueError("Treehouse status is unavailable or malformed; cancellation refused")
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not Path(row["path"]).is_absolute():
+            raise ValueError("Treehouse status is unavailable or malformed; cancellation refused")
+        if not isinstance(row.get("status"), str) or not row["status"]:
+            raise ValueError("Treehouse status is unavailable or malformed; cancellation refused")
+        if row["status"] == "leased" and any(not isinstance(row.get(key), str) or not row[key]
+                                              for key in ("lease_id", "lease_holder")):
+            raise ValueError("Treehouse status is unavailable or malformed; cancellation refused")
+        if "lease_holder" in row and row["lease_holder"] is not None and not isinstance(row["lease_holder"], str):
+            raise ValueError("Treehouse status is unavailable or malformed; cancellation refused")
+        if row.get("lease_holder") == task["holder"]:
+            raise ValueError("Treehouse still records the saved task holder; cancellation refused")
+    return len(rows)
+
+
+def cancellation_process_checks(task):
+    try:
+        output = run(["ps", "-axo", "pid=,ppid=,pgid=,tty=,comm=,args="])
+        rows = output.splitlines()
+        for line in rows:
+            fields = line.split(None, 5)
+            if len(fields) != 6 or any(not field for field in fields[:5]):
+                raise ValueError("Process inspection is malformed; cancellation refused")
+    except (RuntimeError, ValueError):
+        raise ValueError("Process inspection is unavailable or malformed; cancellation refused") from None
+    markers = [str(HOME / task["id"]), task["id"], task["branch"], task["holder"],
+               f"worker {task['id']} ", f"MATE_TASK_ID={task['id']}"]
+    startup = task.get("startup")
+    if isinstance(startup, dict):
+        markers.extend(arg for arg in startup.get("command", [])
+                       if isinstance(arg, str) and arg.startswith("/"))
+    for line in rows:
+        args = line.split(None, 5)[5]
+        if any(marker in args for marker in markers):
+            raise ValueError("Possible task/setup/session process remains; cancellation refused")
+    return len(rows)
+
+
+def cancellation_herdr_checks(task):
+    try:
+        result = herdr(task, "tab", "list", "--workspace", task["workspace"])
+    except Exception:
+        raise ValueError("Herdr task evidence is unavailable; cancellation refused") from None
+    tabs = result.get("tabs") if isinstance(result, dict) else None
+    if not isinstance(tabs, list):
+        raise ValueError("Herdr task evidence is malformed; cancellation refused")
+    for tab in tabs:
+        if not isinstance(tab, dict) or not isinstance(tab.get("tab_id"), str) or tab.get("workspace_id") != task["workspace"]:
+            raise ValueError("Herdr task evidence is malformed; cancellation refused")
+        if tab.get("label") == "mate-" + task["id"]:
+            raise ValueError("Herdr has a matching Mate task tab; cancellation refused")
+    return len(tabs)
+
+
+def inspect_cancel_locked(db, task):
+    state = task.get("state")
+    for key in ("id", "repo", "base", "brief"):
+        if not isinstance(task.get(key), str) or not task[key]:
+            raise ValueError("Task record is malformed; cancellation refused")
+    if task["id"] != task_id(task["id"]):
+        raise ValueError("Task ID is malformed; cancellation refused")
+    startup = task.get("startup")
+    if startup is not None and (not isinstance(startup, dict) or not isinstance(startup.get("command"), list) or
+                                not startup["command"] or
+                                any(not isinstance(arg, str) or not arg for arg in startup["command"])):
+        raise ValueError("Saved startup config is malformed; cancellation refused")
+    if state not in ("awaiting-base", "approved", "attention"):
+        raise ValueError("Only an unstarted awaiting-base/approved task or inspected pre-receipt attention task can be cancelled")
+    if type(task.get("attempt")) is not int or task["attempt"] < 0:
+        raise ValueError("Task attempt is malformed; cancellation refused")
+    attention = state == "attention"
+    if attention:
+        if task["attempt"] != 1 or type(task.get("approved_at")) not in (int, float) or task["approved_at"] <= 0:
+            raise ValueError("Only the initial pre-receipt attention attempt can be cancelled")
+        if task.get("missing_from") not in (None, "acquiring"):
+            raise ValueError("Attention is from a later phase; cancellation refused")
+        for key in ("holder", "session", "socket", "workspace", "error"):
+            if not isinstance(task.get(key), str) or not task[key]:
+                raise ValueError("Saved acquisition identity is malformed; cancellation refused")
+        if not task["holder"].startswith("mate:"):
+            raise ValueError("Saved acquisition holder is malformed; cancellation refused")
+    elif task["attempt"] != 0:
+        raise ValueError("Unstarted cancellation requires attempt 0")
+    allowed_attention_identity = {"holder", "session", "socket", "workspace", "pi_binary", "error", "missing_from"}
+    if any(key in task and (not attention or key not in allowed_attention_identity)
+           for key in CANCELLATION_EXECUTION_FIELDS):
+        raise ValueError("Task has saved execution evidence; cancellation refused")
+    if state == "approved" and type(task.get("approved_at")) not in (int, float):
+        raise ValueError("Approved task record is malformed; cancellation refused")
+    if state == "awaiting-base" and "approved_at" in task:
+        raise ValueError("Awaiting-base task record is malformed; cancellation refused")
+    cancellation_git_checks(task)
+    folder = cancellation_folder(task, required=attention)
+    if attention:
+        cancellation_treehouse_checks(task)
+        cancellation_process_checks(task)
+        cancellation_herdr_checks(task)
+    checks = [f"state {state}, attempt {task['attempt']}", "approved SHA and task branch inspected", "task artifact directory contains no execution evidence"]
+    if attention:
+        checks.extend(["Treehouse status has no row for the exact saved holder", "process snapshot has no task/setup/session match", "Herdr task workspace has no matching Mate tab"])
+    return dict(task=task, confirmation=cancellation_fingerprint(task), already_cancelled=False,
+                requires_external_attestation=attention, checks=checks,
+                artifact_directory=str(folder), treehouse_checked=attention,
+                process_checked=attention, herdr_checked=attention)
+
+
+def inspect_cancel(db, p):
+    task = load(db, p["id"])
+    if task.get("state") == "cancelled":
+        return dict(task=task, already_cancelled=True, confirmation=cancellation_fingerprint(task), checks=[])
+    if (task.get("state") not in ("awaiting-base", "approved", "attention") or
+        (task.get("state") == "attention" and task.get("missing_from") not in (None, "acquiring"))):
+        return inspect_cancel_locked(db, task)
+    folder = cancellation_folder(task, required=task.get("state") == "attention")
+    if folder.exists():
+        try:
+            guard = lock(folder / "run.lock")
+        except BlockingIOError:
+            raise ValueError("Task wrapper lock is busy; cancellation refused") from None
+        try:
+            current = load(db, task["id"])
+            if current != task:
+                raise ValueError("Cancellation inspection became stale; retry the human command")
+            return inspect_cancel_locked(db, current)
+        finally:
+            guard.close()
+    return inspect_cancel_locked(db, task)
+
+
+def cancel(db, p):
+    task = load(db, p["id"])
+    if task.get("state") == "cancelled":
+        return task  # Repeated cancellation preserves the original audit/history.
+    if p.get("confirmed") is not True:
+        raise ValueError("Cancellation requires the human confirmation dialog")
+    expected = p.get("confirmation")
+    if not isinstance(expected, str) or not expected:
+        raise ValueError("Cancellation confirmation is missing")
+    if (cancellation_fingerprint(task) != expected or p.get("state") != task.get("state") or
+        p.get("attempt") != task.get("attempt") or p.get("sha") != task.get("sha")):
+        raise ValueError("Cancellation confirmation is stale; task unchanged")
+    if task["state"] not in ("awaiting-base", "approved", "attention"):
+        raise ValueError("Task is not eligible for cancellation")
+    folder = HOME / task["id"]
+    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
+        raise ValueError("Task artifact directory is malformed; cancellation refused")
+    if task["state"] == "attention" and not folder.exists():
+        raise ValueError("Task artifact directory is missing; cancellation refused")
+    folder.mkdir(mode=0o700, exist_ok=True)
+    try:
+        guard = lock(folder / "run.lock")
+    except BlockingIOError:
+        raise ValueError("Task wrapper lock is busy; cancellation refused") from None
+    try:
+        current = load(db, task["id"])
+        if current.get("state") == "cancelled":
+            return current
+        if cancellation_fingerprint(current) != expected or p.get("state") != current.get("state") or \
+           p.get("attempt") != current.get("attempt") or p.get("sha") != current.get("sha"):
+            raise ValueError("Cancellation confirmation is stale; task unchanged")
+        inspection = inspect_cancel_locked(db, current)
+        if inspection["requires_external_attestation"] and p.get("attest_external") is not True:
+            raise ValueError("Human external-orphan inspection attestation is required")
+        now = time.time()
+        audit = dict(at=now, by=pwd.getpwuid(os.getuid()).pw_name, via="mate-cancel",
+                     state_before=current["state"], attempt=current["attempt"], sha=current["sha"],
+                     external_inspection_attested=inspection["requires_external_attestation"],
+                     checks=inspection["checks"])
+        current.setdefault("cancellation_history", []).append(audit)
+        current.update(state="cancelled", cancelled_at=now, cancelled_by=audit["by"], cancelled_via="mate-cancel")
+        with db:
+            save(db, current)
+            event(db, current, "cancelled", "Human confirmed cancellation; task history and any existing evidence were retained. No cleanup or completion was performed.")
+        return current
+    finally:
+        guard.close()
 
 
 def recover_acquire(db, task):
@@ -778,7 +1012,7 @@ def snapshot(db, p):
     start = int(p.get("task_offset", 0))
     if start < 0:
         raise ValueError("Invalid task offset")
-    result = {"total_tasks": len(all_tasks), "open_tasks": sum(t["state"] != "complete" for t in all_tasks), "tasks": sorted(all_tasks, key=lambda t: t["updated"], reverse=True)[start:start + 50], "events": [dict(zip(("id", "task", "attempt", "kind", "note"), row))
+    result = {"total_tasks": len(all_tasks), "open_tasks": sum(t["state"] not in ("complete", "cancelled") for t in all_tasks), "tasks": sorted(all_tasks, key=lambda t: t["updated"], reverse=True)[start:start + 50], "events": [dict(zip(("id", "task", "attempt", "kind", "note"), row))
               for row in db.execute("SELECT id,task,attempt,kind,note FROM events WHERE ack IS NULL ORDER BY id LIMIT 50")]}
     if p.get("id"):
         task = load(db, p["id"])
@@ -796,7 +1030,7 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
     else:
         task = load(db, p["id"])
         result["tasks"] = [dict(task, usage_total=usage_total(task))]
@@ -906,7 +1140,7 @@ def serve():
     db = connect()
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
     methods = dict(propose=propose, approve=approve, propose_scope=propose_scope, review_scope=review_scope,
-                   dispatch=dispatch, resume=resume,
+                   dispatch=dispatch, resume=resume, inspect_cancel=inspect_cancel, cancel=cancel,
                    status=snapshot, ack=acknowledge, complete=complete, close_tab=close_tab)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
