@@ -244,6 +244,12 @@
       "local_commit": null
     },
     {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned human-only /mate-cancel command: read-only fail-closed preflight and exact stale confirmation for attempt-0 awaiting-base/approved tasks and inspected initial pre-receipt attention. Records distinct cancelled state/audit/event, retains evidence/history/acknowledgements, excludes cancelled tasks from open capacity, and never launches/retries/cleans up/fakes completion. Rebased integration retains shared-tab placement intent, refuses both endpoint receipt shapes/uncertain splits, and keeps cancelled tasks outside force completion. No upstream code copied.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "README.md", "SUPERVISOR.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R03", "R04"],
       "description": "Native interactive Pi worker instead of print/JSON stdout. Referenced the pinned fm-spawn.sh pi launch_template; Mate-owned worker-events.ts uses a separate inherited pipe and agent_settled before graceful exit. Existing report/wake/continuation contracts retained; forced Pi termination is attention. No new upstream code copied; initial snapshots preserved.",
       "paths": ["bin/mate.py", "bin/worker-events.ts"],

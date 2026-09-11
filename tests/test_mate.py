@@ -116,10 +116,12 @@ class MateTests(unittest.TestCase):
             self.assertEqual(sum(c[:2] == ('pane', 'split') for c in calls), 1)
             self.assertFalse(any(c[:2] == ('tab', 'create') for c in calls))
             self.assertTrue(all(c[2] == 'w1:p3' for c in calls if c[:2] == ('pane', 'run')))
-            resumed['state'] = 'review'
+            resumed['state'] = 'failed'
             with self.db:
                 m.save(self.db, resumed)
-            m.complete(self.db, dict(id='fix', attempt=2))
+            completed = m.complete(self.db, dict(id='fix', attempt=2, force=True))
+            self.assertEqual(completed['completed_from'], 'failed')
+            self.assertEqual(completed['completed_via'], 'mate-complete --force')
             with self.assertRaisesRegex(ValueError, 'Shared tab'):
                 m.close_tab(self.db, dict(id='fix', attempt=2, tab='w1:t1'))
 
@@ -158,6 +160,8 @@ class MateTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Lost split'):
                 self.dispatch(same_tab_as='related')
             self.assertEqual(self.dispatch()['state'], 'attention')
+            with self.assertRaisesRegex(ValueError, 'execution evidence'):
+                m.inspect_cancel(self.db, dict(id='fix'))
             self.assertEqual((self.acquires, self.launches), (1, 0))
 
     def test_same_tab_acquisition_recovery_keeps_pinned_target(self):
@@ -729,6 +733,210 @@ print('fixture-private-output')
         task = m.load(self.db, 'fix'); del task['usage']['1']
         self.assertEqual(m.usage_total(task)['untracked_attempts'], [1])
         self.assertEqual(m.usage_total(task)['estimated_cost_usd'], 0.125)
+
+    def cancellation_attention_fixture(self, ident="cancel-attention"):
+        task = self.propose(ident)
+        task = m.approve(self.db, dict(id=ident, sha=self.sha))
+        task.update(state="attention", attempt=1, holder="mate:cancel-holder", session="mate-test",
+                    socket=str(self.root / "herdr.sock"), workspace="w1", missing_from="acquiring",
+                    error="Treehouse acquire outcome was uncertain", pi_binary=sys.executable,
+                    provider="openai-codex", model="test-model", effort="off", project="fixture",
+                    startup={"command": ["true"]})
+        folder = self.home / ident
+        folder.mkdir(mode=0o700)
+        (folder / "run.lock").touch()
+        with self.db:
+            m.save(self.db, task)
+        return task
+
+    def cancel_params(self, inspection, **extra):
+        task = inspection["task"]
+        params = dict(id=task["id"], state=task["state"], attempt=task["attempt"], sha=task["sha"],
+                      confirmation=inspection["confirmation"], confirmed=True,
+                      attest_external=inspection.get("requires_external_attestation", False))
+        params.update(extra)
+        return params
+
+    def test_human_cancel_unstarted_preserves_history_and_is_idempotent(self):
+        task = self.propose()
+        approved = m.approve(self.db, dict(id="fix", sha=self.sha))
+        with self.db:
+            m.event(self.db, task, "report", "Prior durable evidence")
+        report_id = m.snapshot(self.db, {})["events"][0]["id"]
+        m.acknowledge(self.db, dict(events=[report_id], note="Retained prior evidence"))
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", side_effect=AssertionError("No Herdr operation for attempt 0")):
+            inspection = m.inspect_cancel(self.db, dict(id="fix"))
+            self.assertEqual(inspection["requires_external_attestation"], False)
+            self.assertEqual(self.acquires, 0)
+            cancelled = m.cancel(self.db, self.cancel_params(inspection))
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertEqual(cancelled["sha"], approved["sha"])
+        self.assertEqual(cancelled["cancellation_history"][0]["state_before"], "approved")
+        self.assertFalse(cancelled["cancellation_history"][0]["external_inspection_attested"])
+        self.assertEqual(cancelled["cancelled_via"], "mate-cancel")
+        self.assertFalse("lease" in cancelled or "worktree" in cancelled or "endpoint_receipt" in cancelled)
+        self.assertFalse((self.home / "fix" / "session.jsonl").exists())
+        self.assertEqual(m.snapshot(self.db, {})["open_tasks"], 0)
+        self.assertEqual(len(m.snapshot(self.db, {})["events"]), 1, "cancellation event is separate from prior acknowledged event")
+        audit = cancelled["cancellation_history"]
+        self.assertEqual(m.cancel(self.db, self.cancel_params(inspection))["cancellation_history"], audit)
+        with patch.object(m, "run", side_effect=AssertionError("No dispatch after cancellation")), patch.object(m, "herdr", side_effect=AssertionError("No Herdr operation")):
+            with self.assertRaisesRegex(ValueError, "cannot be dispatched"):
+                m.dispatch(self.db, dict(id="fix"))
+        for operation in (
+            lambda: m.resume(self.db, dict(id="fix", message="must refuse")),
+            lambda: m.propose_scope(self.db, dict(id="fix", brief="must refuse")),
+            lambda: m.complete(self.db, dict(id="fix", attempt=0)),
+            lambda: m.complete(self.db, dict(id="fix", attempt=0, force=True)),
+            lambda: m.close_tab(self.db, dict(id="fix", attempt=0, tab="none")),
+        ):
+            with self.assertRaises(ValueError):
+                operation()
+        self.assertEqual(m.load(self.db, "fix")["cancellation_history"], audit)
+        pending = self.propose("pending-cancel")
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", side_effect=AssertionError("No Herdr operation for awaiting-base")):
+            pending_inspection = m.inspect_cancel(self.db, dict(id="pending-cancel"))
+            pending_cancelled = m.cancel(self.db, self.cancel_params(pending_inspection))
+        self.assertEqual(pending_cancelled["state"], "cancelled")
+        self.assertNotIn("approved_at", pending_cancelled)
+
+    def test_pre_receipt_attention_cancel_requires_inspection_and_attestation(self):
+        task = self.cancellation_attention_fixture()
+        def herdr_cancel(current, *args):
+            self.assertEqual(args, ("tab", "list", "--workspace", "w1"))
+            return {"tabs": []}
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", herdr_cancel):
+            inspection = m.inspect_cancel(self.db, dict(id=task["id"]))
+            self.assertTrue(inspection["requires_external_attestation"])
+            with self.assertRaisesRegex(ValueError, "attestation"):
+                m.cancel(self.db, self.cancel_params(inspection, attest_external=False))
+            self.assertEqual(m.load(self.db, task["id"])["state"], "attention")
+            cancelled = m.cancel(self.db, self.cancel_params(inspection, attest_external=True))
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertTrue(cancelled["cancellation_history"][0]["external_inspection_attested"])
+        self.assertEqual(cancelled["cancellation_history"][0]["attempt"], 1)
+        self.assertEqual(self.acquires, 0)
+        self.assertEqual(self.launches, 0)
+        self.assertEqual(m.snapshot(self.db, {})["open_tasks"], 0)
+
+    def test_shared_tab_pre_receipt_cancel_preserves_target_and_refuses_split_receipt(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        def fail_acquire(args, cwd=None, timeout=30):
+            if args[:2] == ['treehouse', 'get']:
+                raise RuntimeError('Fixture acquisition failure')
+            return self.fake_run(args, cwd, timeout)
+        with patch.object(m, 'run', fail_acquire), patch.object(m, 'herdr', self.fake_herdr):
+            with self.assertRaisesRegex(RuntimeError, 'Fixture acquisition'):
+                self.dispatch(same_tab_as='supervisor')
+        failed = m.load(self.db, 'fix')
+        with self.assertRaisesRegex(ValueError, 'uncertain task'):
+            m.check_capacity(self.db)
+        for receipt in ({'pane': {'terminal_id': 'split-terminal'}},
+                        {'root_pane': {'terminal_id': 'original-terminal'}}):
+            with self.subTest(receipt=receipt):
+                with self.db:
+                    m.save(self.db, dict(failed, endpoint_receipt=receipt))
+                with self.assertRaisesRegex(ValueError, 'execution evidence'):
+                    m.inspect_cancel(self.db, dict(id='fix'))
+                self.assertEqual(m.load(self.db, 'fix')['endpoint_receipt'], receipt)
+        with self.db:
+            m.save(self.db, failed)
+        def herdr_inspection(task, *args):
+            self.assertEqual(args, ('tab', 'list', '--workspace', 'w1'))
+            return {'tabs': [dict(tab_id='w1:t1', workspace_id='w1', label='supervisor')]}
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr_inspection):
+            inspection = m.inspect_cancel(self.db, dict(id='fix'))
+            cancelled = m.cancel(self.db, self.cancel_params(inspection))
+        self.assertEqual(cancelled['state'], 'cancelled')
+        for key in ('same_tab_as', 'split_target', 'sha', 'holder', 'error'):
+            self.assertEqual(cancelled[key], failed[key])
+        self.assertNotIn('endpoint_receipt', cancelled)
+        self.assertEqual((self.acquires, self.launches), (0, 0))
+        m.check_capacity(self.db)
+        self.assertEqual(m.snapshot(self.db, {})['open_tasks'], 0)
+
+    def test_cancel_refuses_resources_orphan_evidence_and_stale_or_busy_confirmation(self):
+        task = self.cancellation_attention_fixture("refuse-cancel")
+        def herdr_cancel(current, *args):
+            return {"tabs": []}
+        for key in ("lease", "worktree", "startup_state", "endpoint_receipt", "usage", "followup"):
+            changed = dict(task, **{key: {} if key != "startup_state" else "failed"})
+            with self.db:
+                m.save(self.db, changed)
+            with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", herdr_cancel):
+                with self.assertRaisesRegex(ValueError, "evidence"):
+                    m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+            self.assertEqual(m.load(self.db, "refuse-cancel")["state"], "attention")
+        with self.db:
+            m.save(self.db, task)
+        self.leases = [dict(path=str(self.root / "other-wt"), status="leased", lease_id="l", lease_holder=task["holder"])]
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", herdr_cancel):
+            with self.assertRaisesRegex(ValueError, "holder"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        self.leases = []
+        branch = task["branch"]
+        m.git(self.repo, "branch", branch)
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", herdr_cancel):
+            with self.assertRaisesRegex(ValueError, "branch"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        m.git(self.repo, "branch", "-D", branch)
+        (self.home / "refuse-cancel" / "report-1.txt").write_text("saved evidence")
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", herdr_cancel):
+            with self.assertRaisesRegex(ValueError, "artifacts"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        (self.home / "refuse-cancel" / "report-1.txt").unlink()
+        with m.lock(self.home / "refuse-cancel" / "run.lock"):
+            with self.assertRaisesRegex(ValueError, "busy"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", herdr_cancel):
+            inspection = m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+            changed = m.load(self.db, "refuse-cancel")
+            changed["brief"] = "changed while dialog was open"
+            with self.db:
+                m.save(self.db, changed)
+            with self.assertRaisesRegex(ValueError, "stale"):
+                m.cancel(self.db, self.cancel_params(inspection, confirmation=inspection["confirmation"]))
+        self.assertEqual(m.load(self.db, "refuse-cancel")["state"], "attention")
+        with self.db:
+            m.save(self.db, task)
+        def matching_process(args, cwd=None, timeout=30):
+            output = self.fake_run(args, cwd, timeout)
+            return output + f"\n101 1 101 ttys100 pi pi --task {task['id']}" if args[0] == "ps" else output
+        with patch.object(m, "run", matching_process), patch.object(m, "herdr", herdr_cancel):
+            with self.assertRaisesRegex(ValueError, "process"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", lambda *_: {"tabs": [{"tab_id": "w1:t9", "workspace_id": "w1", "label": "mate-refuse-cancel"}]}):
+            with self.assertRaisesRegex(ValueError, "matching Mate task tab"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", side_effect=RuntimeError("unavailable")):
+            with self.assertRaisesRegex(ValueError, "Herdr"):
+                m.inspect_cancel(self.db, dict(id="refuse-cancel"))
+        self.assertEqual(m.load(self.db, "refuse-cancel")["state"], "attention")
+
+    def test_cancel_refuses_later_phases_and_unknown_inspection(self):
+        task = self.propose("phase-cancel")
+        for state in ("acquiring", "launching", "running", "review", "failed", "complete"):
+            changed = dict(task, state=state, attempt=1)
+            with self.db:
+                m.save(self.db, changed)
+            with self.assertRaises(ValueError):
+                m.inspect_cancel(self.db, dict(id="phase-cancel"))
+        with self.db:
+            m.save(self.db, dict(task, state="attention", attempt=1, approved_at=1,
+                                 holder="mate:x", session="s", socket="/missing", workspace="w",
+                                 error="later phase", missing_from="launching"))
+        with self.assertRaisesRegex(ValueError, "later phase"):
+            m.inspect_cancel(self.db, dict(id="phase-cancel"))
+        phase_folder = self.home / "phase-cancel"
+        phase_folder.mkdir(mode=0o700)
+        (phase_folder / "run.lock").touch()
+        with self.db:
+            m.save(self.db, dict(task, state="attention", attempt=1, approved_at=1,
+                                 holder="mate:x", session="s", socket="/missing", workspace="w",
+                                 error="corrupt", missing_from="acquiring", lease=None))
+        with self.assertRaisesRegex(ValueError, "evidence"):
+            m.inspect_cancel(self.db, dict(id="phase-cancel"))
 
     def test_complete_requires_review_stopped_worker_and_exact_attempt(self):
         task = self.propose()

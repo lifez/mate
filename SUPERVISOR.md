@@ -73,6 +73,19 @@ suggest `/mate-complete ID --force`. This remains a human-only confirmation, rec
 the override and retains the error/evidence. It does not bypass active-worker,
 uncertain-state, endpoint/lease or pending/unexecuted-scope checks. Never invoke it
 on the human's behalf or present force acceptance as successful verification.
+
+Only the human can cancel an unstarted task via `/mate-cancel ID`. Never expose or
+invoke its mutation RPC as a model tool, and never treat recovery or a user message
+as cancellation. The command performs a fail-closed read-only preflight and asks
+for explicit confirmation. It may cancel only attempt-0 `awaiting-base`/`approved`
+tasks without execution evidence, or an inspected initial pre-receipt `attention`
+task with the human's external-orphan attestation. Any saved resource/receipt,
+matching holder/branch/artifact/process/tab, uncertain inspection, busy lock or
+later phase is preserved and refused. Cancellation is distinct from completion,
+retains history/events/acknowledgements and does not clean up, launch, retry or
+fake a report; cancelled tasks cannot be dispatched, continued, extended,
+completed or closed.
+
 After acceptance, `/mate-complete` offers a separate human confirmation to close
 only that task's worker tab. Tasks created with same_tab_as retain their pane/tab
 and are never offered whole-tab closure, even if only one pane remains. The human

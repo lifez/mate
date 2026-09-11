@@ -239,6 +239,10 @@ try {
   assert.equal(handlers.tool_call({ toolName: 'mate_close_tab' }).block, true);
   assert.equal(tools.mate_complete, undefined, 'completion is not a model tool');
   assert.equal(handlers.tool_call({ toolName: 'mate_complete' }).block, true);
+  assert.equal(tools.mate_cancel, undefined, 'cancellation is not a model tool');
+  assert.equal(tools.mate_inspect_cancel, undefined, 'cancellation preflight is not a model tool');
+  assert.equal(handlers.tool_call({ toolName: 'mate_cancel' }).block, true);
+  assert.equal(typeof commands['mate-cancel'].handler, 'function');
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'approved', 'cannot complete before review');
   execFileSync('python3', ['-c', `import sqlite3,os,json\np=os.environ['MATE_HOME']\nc=sqlite3.connect(os.path.join(p,'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(state='review',attempt=1)\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()\nos.makedirs(os.path.join(p,'inspect'),exist_ok=True)`]);
@@ -330,6 +334,31 @@ try {
   assert.equal(notices.at(-1)[1], 'error');
   assert.equal((await call('mate_status')).tasks[0].state, 'complete');
   assert.equal(messages.filter(m => m.message.customType === 'mate-tab-closed').length, 0);
+
+  // Cancellation is a human command only: decline is a no-op, confirmation routes
+  // through the read-only preflight and mutation RPC, and repeats retain its audit.
+  await call('mate_propose', { id: 'cancel-me', repo, base: 'main', brief: 'Disposable cancellation fixture.' });
+  approval = false;
+  await commands['mate-cancel'].handler('cancel-me', ctx);
+  assert.equal((await call('mate_status', { id: 'cancel-me' })).tasks[0].state, 'awaiting-base');
+  approval = true;
+  await commands['mate-approve'].handler('cancel-me', ctx);
+  assert.equal((await call('mate_status', { id: 'cancel-me' })).tasks[0].state, 'approved');
+  approval = false;
+  await commands['mate-cancel'].handler('cancel-me', ctx);
+  assert.equal((await call('mate_status', { id: 'cancel-me' })).tasks[0].state, 'approved', 'decline must not mutate');
+  approval = true;
+  await commands['mate-cancel'].handler('cancel-me', ctx);
+  let cancelled = (await call('mate_status', { id: 'cancel-me' })).tasks[0];
+  assert.equal(cancelled.state, 'cancelled');
+  assert.equal(cancelled.completed_at, undefined);
+  assert.equal(cancelled.cancelled_via, 'mate-cancel');
+  assert.equal((await call('mate_status')).open_tasks, 0, 'cancelled history is not open capacity');
+  assert.equal(messages.filter(m => m.message.customType === 'mate-cancelled').length, 1);
+  await commands['mate-cancel'].handler('cancel-me', ctx);
+  cancelled = (await call('mate_status', { id: 'cancel-me' })).tasks[0];
+  assert.equal(cancelled.cancellation_history.length, 1, 'repeat preserves original cancellation audit');
+
   execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['same_tab_as']='supervisor'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => { throw new Error('Must not offer shared-tab closure'); } } });
   assert.match(notices.at(-1)[0], /Shared tab and worker pane retained/);
@@ -353,7 +382,7 @@ try {
   const stopped = messages.length;
   await sleep(2100);
   assert.equal(messages.length, stopped, 'shutdown does not re-arm');
-  console.log('PASS: dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval, follow-up wake, dedup, restart replay, ack, shutdown');
+  console.log('PASS: dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
 } finally {
   await handlers.session_shutdown();
   rmSync(tmp, { recursive: true, force: true });

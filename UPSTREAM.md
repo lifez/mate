@@ -49,7 +49,7 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   approval, profile/startup and full failed-task history; retry uses a new attempt and
   holder without deleting evidence. No model RPC, cleanup or upstream import.
 
-- Mate-owned footer correction: count non-complete tasks across the full snapshot,
+- Mate-owned footer correction: count non-complete/non-cancelled tasks across the full snapshot,
   retaining total/history and pending events. No upstream import or baseline change.
 
 - Local config packaging: track `mate.config.example.json` instead of personal
@@ -79,6 +79,12 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Mate-owned `/mate-complete ID`: human confirmation จาก review → complete เท่านั้น,
   ตรวจ exact attempt + worker lock, บันทึกเวลา/OS account; ไม่ ack/cleanup/merge และไม่มี reopen
   (ไม่มี upstream import เพิ่ม; tests ตรวจ gate/idempotency/persistence และ UI deny/accept)
+- Mate-owned human-only `/mate-cancel ID`: read-only preflight and exact stale-confirmation
+  gate for attempt-0 awaiting-base/approved tasks and inspected initial pre-receipt attention;
+  preserve all evidence/history/ack, record distinct cancelled state/audit/event, and refuse
+  any resource/orphan/lock/process/Herdr uncertainty. Rebased integration retains
+  shared-tab placement intent, refuses both endpoint receipt shapes/uncertain splits,
+  and keeps cancelled tasks outside force completion. No upstream code copied.
 - Mate-owned change: per-task model/effort overrides ใน dispatch/continue; validate ผ่าน Pi catalog/capabilities,
   persist resolved profile และส่ง effort เป็น `--thinking` โดยไม่เปลี่ยน supervisor model หรือ approved base
 - Mate-owned config: `mate.config.json` กำหนด worker model/effort default แยกจากตัวหลัก;
