@@ -1048,6 +1048,87 @@ print('fixture-private-output')
                     with self.assertRaisesRegex(ValueError, 'background/stopped'):
                         m.ready_pane(task)
 
+    def test_initial_preflight_recovery_preserves_resources_and_confirms_start(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        def busy(t, *args):
+            result = self.fake_herdr(t, *args)
+            if args[:2] == ('pane', 'process-info'):
+                result['process_info']['foreground_processes'] = [dict(pid=101)]
+            return result
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', busy):
+            with self.assertRaisesRegex(m.LaunchPreflightRefused, 'idle shell'):
+                self.dispatch(effort='high')
+        original = m.load(self.db, 'fix')
+        self.assertEqual(original['launch_stage'], 'preflight-refused')
+        self.assertEqual((self.acquires, self.launches), (1, 0))
+        folder = self.home / 'fix'
+        dirty = Path(original['worktree']) / 'keep.txt'
+        dirty.write_text('preserved startup output')
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            def refused():
+                before = m.load(self.db, 'fix')
+                with self.assertRaises((ValueError, RuntimeError)):
+                    m.resume(self.db, dict(id='fix', message='Continue'))
+                self.assertEqual(m.load(self.db, 'fix'), before)
+                self.assertEqual(self.launches, 0)
+            for change in (dict(usage={'1': {}}), dict(launch_stage='uncertain'),
+                           dict(missing_from='running'), dict(startup_state='failed'),
+                           dict(branch='foreign'), dict(endpoint_receipt={}),
+                           dict(pending_scope={'brief': 'not approved'})):
+                with self.db: m.save(self.db, dict(original, **change))
+                refused()
+            with self.db: m.save(self.db, original)
+            for name in ('session.jsonl', 'events-1.jsonl', 'stderr-1.log', 'report-1.txt', 'unknown'):
+                artifact = folder / name
+                artifact.write_text('')
+                refused()
+                artifact.unlink()
+            self.leases[0]['processes'] = [dict(pid=100), dict(pid=101)]
+            refused()
+            self.leases[0]['processes'] = [dict(pid=100)]
+            with m.lock(folder / 'run.lock'):
+                with self.assertRaises(BlockingIOError):
+                    m.resume(self.db, dict(id='fix', message='Continue'))
+            # The exact old dispatch shape remains recoverable without state migration.
+            legacy = dict(original)
+            del legacy['launch_stage']
+            with self.db: m.save(self.db, legacy)
+            def started(t, *args):
+                result = self.fake_herdr(t, *args)
+                if args[:2] == ('pane', 'run'):
+                    current = m.load(self.db, 'fix')
+                    current['state'] = 'review'  # A fast run may finish before observation.
+                    with self.db:
+                        m.save(self.db, current)
+                        m.event(self.db, current, 'worker-started', 'fixture Pi start')
+                return result
+            with patch.object(m, 'herdr', started):
+                recovered = m.resume(self.db, dict(id='fix', message='Proceed within scope'))
+            self.assertEqual(recovered['launch_confirmation'], 'started')
+            self.assertEqual((recovered['attempt'], recovered['state']), (2, 'review'))
+            self.assertEqual(recovered['launch_recoveries'][0]['task'], legacy)
+            for key in ('lease', 'holder', 'worktree', 'pane', 'tab', 'endpoint_receipt',
+                        'sha', 'branch', 'brief', 'approved_at', 'model', 'effort'):
+                self.assertEqual(recovered[key], original[key])
+            self.assertIn(original['brief'], recovered['followup'])
+            self.assertEqual(dirty.read_text(), 'preserved startup output')
+            self.assertFalse((folder / 'report-1.txt').exists())
+            self.assertEqual((self.acquires, self.launches), (1, 1))
+            # Timeout is observation only: no retry, report fabrication or state reset.
+            with self.db:
+                self.db.execute("DELETE FROM events WHERE task='fix' AND kind='worker-started'")
+                current = m.load(self.db, 'fix')
+                current['state'] = 'launching'
+                m.save(self.db, current)
+            with patch.object(m.time, 'monotonic', side_effect=[0, 11]):
+                result = m.confirm_recovered_worker(self.db, current)
+            self.assertEqual(result['launch_confirmation'], 'unconfirmed')
+            self.assertEqual(m.load(self.db, 'fix'), current)
+            self.assertEqual(self.launches, 1)
+            with self.assertRaises(ValueError):
+                m.resume(self.db, dict(id='fix', message='Duplicate'))
+
     def test_pane_launch_guard_and_missing_continuation_recovery(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
@@ -1260,6 +1341,7 @@ print('fixture-private-output')
             path = fakebin / name
             path.write_text(content); path.chmod(0o755)
         task["pi_binary"] = str(fakebin / "pi")
+        task['launch_recoveries'] = [dict(outcome='launch-failed', task=dict(attempt=0))]
         with self.db:
             m.save(self.db, task)
         env = dict(os.environ, PATH=str(fakebin) + os.pathsep + os.environ["PATH"], HERDR_PANE_ID=task["pane"])
@@ -1267,6 +1349,7 @@ print('fixture-private-output')
         output = subprocess.run(command, env=env, cwd=task["worktree"], capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('Native Pi terminal output', output.stdout)
         self.assertEqual(m.load(self.db, "fix")["state"], "review")
+        self.assertEqual(m.confirm_recovered_worker(self.db, task)['launch_confirmation'], 'started')
         self.assertEqual(m.snapshot(self.db, {})['tasks'][0]['usage_total']['estimated_cost_usd'], 0.125)
         argv = json.loads((self.home / "argv.json").read_text())
         self.assertEqual(argv[argv.index("--model") + 1], "selected-model")

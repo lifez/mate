@@ -459,6 +459,8 @@ def dispatch(db, p):
             latest = load(db, task["id"])
             if latest["state"] in ("acquiring", "launching"):
                 task.update(state="attention", error=str(exc))
+                if task.get("pane"):
+                    task["launch_stage"] = "preflight-refused" if isinstance(exc, LaunchPreflightRefused) else "uncertain"
                 save(db, task)
                 event(db, task, "launch-uncertain", str(exc))
         raise
@@ -469,7 +471,7 @@ CANCELLATION_EXECUTION_FIELDS = (
     "lease", "worktree", "startup_state", "startup_started_at", "startup_finished_at",
     "startup_pid", "startup_exit_code", "endpoint_receipt", "pane", "tab", "session",
     "socket", "workspace", "pi_binary", "holder", "usage", "followup", "error",
-    "missing_from", "recoveries", "launch_recoveries")
+    "missing_from", "recoveries", "launch_recoveries", "launch_stage")
 
 
 def cancellation_fingerprint(task):
@@ -785,9 +787,28 @@ def ready_pane(task):
 
 
 def inspect_missing_launch(db, task):
-    """Only an unstarted continuation, never a crashed Pi or uncertain acquisition."""
+    """Prove an initial preflight refusal or an unstarted continuation, never a crash."""
     attempt = task["attempt"]
-    if (task.get("error") != "No worker lock after 60s. Resources retained; no automatic relaunch." or
+    initial = attempt == 1 and not task.get("followup") and not task.get("usage")
+    if initial:
+        # Legacy dispatch emitted this exact error before pane run. New records
+        # additionally distinguish preflight refusal from uncertain submission.
+        expected = "Worker pane is not an idle shell; return it to its shell, then request mate_continue. No keys sent."
+        if (task.get("error") != expected or task.get("launch_stage") not in (None, "preflight-refused") or
+            task.get("missing_from") is not None or not task.get("approved_at") or
+            task.get("startup_state") not in (None, "succeeded") or
+            (task.get("startup") and task.get("startup_state") != "succeeded") or
+            task.get("recoveries") or task.get("launch_recoveries") or task.get("scope_history") or
+            not db.execute("SELECT 1 FROM events WHERE task=? AND attempt=1 AND kind='launch-uncertain' AND note=?",
+                           (task["id"], expected)).fetchone() or
+            db.execute("SELECT 1 FROM events WHERE task=? AND kind NOT IN ('base-approved', 'launch-uncertain')",
+                       (task["id"],)).fetchone()):
+            raise ValueError("Only a proven initial preflight refusal can recover; uncertain launches require inspection")
+        folder = HOME / task["id"]
+        if folder.is_symlink() or any(p.name not in ("run.lock", "startup.log") or
+                                     p.is_symlink() or not p.is_file() for p in folder.iterdir()):
+            raise ValueError("Initial attempt has execution artifacts or uncertain paths; recovery refused")
+    elif (task.get("error") != "No worker lock after 60s. Resources retained; no automatic relaunch." or
         task.get("missing_from", "launching") != "launching" or not task.get("approved_at") or
         task.get("startup_state") not in (None, "succeeded") or not task.get("followup") or
         not task.get("usage") or str(attempt) in task["usage"] or
@@ -807,6 +828,18 @@ def inspect_missing_launch(db, task):
         git(wt, "symbolic-ref", "HEAD") != "refs/heads/" + task["branch"]):
         raise ValueError("Worktree/repository/branch identity changed")
     git(wt, "merge-base", "--is-ancestor", task["sha"], "HEAD")
+    if initial:
+        if git(wt, "rev-parse", "HEAD") != task["sha"]:
+            raise ValueError("Initial worktree HEAD changed; recovery refused")
+        inventory = lease.get("processes")
+        if (not isinstance(inventory, list) or len(inventory) != 1 or
+            not isinstance(inventory[0], dict) or inventory[0].get("pid") != shell):
+            raise ValueError("Treehouse process inventory is uncertain or contains other worktree processes")
+        if any(str(folder) in row["args"] or wt in row["args"] or
+               f"{ROOT / 'bin/mate.py'} worker {task['id']} " in row["args"]
+               for pid, row in processes.items() if pid != shell):
+            raise ValueError("Possible task/worktree process remains; recovery refused")
+        return True
     session = folder / "session.jsonl"
     if session.is_symlink():
         raise ValueError("Saved Pi session path changed")
@@ -833,14 +866,34 @@ def inspect_missing_launch(db, task):
         raise ValueError("Possible task/session process remains; recovery refused")
 
 
+class LaunchPreflightRefused(ValueError):
+    pass
+
+
 def launch_worker(task):
     with lock(HOME / task["id"] / "run.lock"):
-        ready_pane(task)  # Shared by dispatch and continuation; never type into Vite/Pi.
+        try:
+            ready_pane(task)  # Shared by dispatch and continuation; never type into Vite/Pi.
+        except ValueError as exc:
+            raise LaunchPreflightRefused(str(exc)) from exc
     # The receiving wrapper needs this lock, so release it before submitting to Herdr.
     command = shlex.join(["env", f"MATE_HOME={HOME}", sys.executable, str(ROOT / "bin/mate.py"),
                           "worker", task["id"], str(task["attempt"])])
     command = "cd -- " + shlex.quote(task["worktree"]) + " && " + command
     herdr(task, "pane", "run", task["pane"], command)
+
+
+def confirm_recovered_worker(db, task):
+    # Observe once, never resubmit. The durable receipt also covers a fast exit;
+    # it proves Popen succeeded, not successful work or a still-live Pi.
+    deadline = time.monotonic() + 10
+    while True:
+        started = db.execute("SELECT 1 FROM events WHERE task=? AND attempt=? AND kind='worker-started'",
+                             (task["id"], task["attempt"])).fetchone()
+        current = load(db, task["id"])
+        if started or current["state"] not in ("launching", "running") or time.monotonic() >= deadline:
+            return dict(current, launch_confirmation="started" if started else "unconfirmed")
+        time.sleep(0.1)
 
 
 def resume(db, p):
@@ -852,10 +905,11 @@ def resume(db, p):
     profile = worker_profile(p, task)
     message = text(p["message"], "message")
     recovering = task["state"] == "attention"
+    initial = False
     # Keep late old wrappers out until checks and the next-attempt journal commit finish.
     with lock(HOME / task["id"] / "run.lock"):
         if recovering:
-            inspect_missing_launch(db, task)
+            initial = inspect_missing_launch(db, task)
         else:
             ready_pane(task)
             check_lease(task)
@@ -867,8 +921,13 @@ def resume(db, p):
                 previous = {k: v for k, v in task.items() if k != "launch_recoveries"}
                 task.setdefault("launch_recoveries", []).append(dict(task=previous, at=time.time(),
                     via="mate_continue", outcome="launch-failed"))
-                event(db, task, "launch-recovered", "Inspected unstarted launch; continuing in the same worktree/session with a new attempt. Prior evidence and approval retained.")
+                event(db, task, "launch-recovered",
+                      "Inspected initial preflight refusal; starting the first Pi session in the same worktree with a new attempt. Prior evidence and approval retained."
+                      if initial else "Inspected unstarted launch; continuing in the same worktree/session with a new attempt. Prior evidence and approval retained.")
+            if initial:
+                message = task["brief"] + "\n\nRecovery instructions (within approved scope only):\n" + message
             task.update(attempt=task["attempt"] + 1, state="launching", followup=message, **profile)
+            task.pop("launch_stage", None)
             task.pop("error", None)
             task.pop("missing_from", None)
             save(db, task)
@@ -878,7 +937,7 @@ def resume(db, p):
         with db:
             event(db, task, "launch-uncertain", str(exc))
         raise
-    return load(db, task["id"])
+    return confirm_recovered_worker(db, task) if initial else load(db, task["id"])
 
 
 def complete(db, p):
@@ -1225,6 +1284,9 @@ def worker(ident, attempt):
                 child = subprocess.Popen(args, cwd=task["worktree"], stderr=err,
                                          # Reuse Mate's no-supervisor mode; other extensions/skills still load.
                                          env=dict(os.environ, MATE_MODE="dev", MATE_EVENT_FD=str(write_fd)), pass_fds=(write_fd,))
+                if task.get("launch_recoveries"):
+                    with db:
+                        event(db, task, "worker-started", "Pi process started in the saved endpoint/worktree; not verified completion.")
             finally:
                 os.close(write_fd)
             def stop(_sig, _frame):

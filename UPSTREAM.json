@@ -166,6 +166,14 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R03", "R05"],
+      "description": "Reference-only Firstmate relaunch journal and postcondition pattern; Mate-owned narrow initial attempt-1 idle-shell preflight recovery via mate_continue. Fail closed on execution evidence, identity/lease/process uncertainty or changed HEAD; retain full old attempt and resources, no startup rerun. Observe durable post-Popen worker-started receipt for up to 10 seconds, never retry on timeout. No upstream shell code imported; original baselines retained.",
+      "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
+      "reviewed_scope": "Selected fm-control.sh relaunch checkpoint/journal/confirmation and fm-spawn.sh agent-free endpoint gates; related #4120 and #4172 changes only, not a full component audit.",
+      "paths": ["bin/mate.py", "tests/test_mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R06"],
       "description": "Mate-owned explicit approval/report wake actions and one corrective follow-up for delivered unacknowledged events after agent_settled per generation, then persistent UNHANDLED footer. No direct launch/retry or schema change; acknowledgement is not semantic verification. No upstream import or provenance baseline change.",
       "paths": [".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "tests/extension-check.mjs", "README.md"],

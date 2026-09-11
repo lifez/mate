@@ -453,8 +453,8 @@ attempt rather than counting the saved session history again.
 - A hard-killed worker wrapper might leave its child running. Missing worker locks
   therefore become **attention**, not a resumable failure. Inspect the recorded
   pane, lease and processes manually; the runtime has no general force-repair or
-  force-cleanup command. Only the narrow unstarted-continuation and pre-receipt
-  acquisition recoveries below are supported.
+  force-cleanup command. Only the narrow initial-preflight, unstarted-continuation
+  and pre-receipt acquisition recoveries below are supported.
 
 ## Auto-wake and recovery
 
@@ -489,6 +489,37 @@ prevent automatic duplicate acquisition. No model calls are made just to wait.
 Closing the supervisor leaves workers running. Reopen with the **same MATE_HOME**
 to recover reports and task state. Existing live workers are not restarted. Ambiguous
 or missing workers are surfaced for inspection, not silently adopted/relaunched.
+
+### Recover an initial launch refused before submission
+
+After the human returns the original pane to its idle shell, `mate_continue` also
+accepts the narrow initial attempt-1 `attention` case with the exact saved
+"Worker pane is not an idle shell ... No keys sent." refusal and matching durable
+`launch-uncertain` event. New records distinguish `launch_stage: preflight-refused`
+from uncertain submission; the exact legacy refusal is supported without migration.
+A timeout, missing worker, crashed Pi or ambiguous pane command is **not** eligible.
+
+Under the worker lock it checks the original endpoint/terminal, exact lease/holder,
+isolated worktree/common directory, branch and unchanged approved HEAD; startup
+must have succeeded if configured. No session, usage, reports, worker events,
+unknown artifacts or possible task/worktree processes may remain. Only the idle
+shell may appear in Treehouse's process inventory. Pending scope, other attention
+tasks and worker capacity still block. Dirty startup files are preserved.
+
+Success retains the entire prior record in `launch_recoveries`, emits
+`launch-recovered` on the old attempt and starts one new attempt with the approved
+brief plus the recovery instructions. Approval, settings, lease, worktree and pane
+are retained; no startup rerun, acquisition, reset or cleanup. This is the first Pi
+session, not a resume of a nonexistent one.
+
+The call observes for up to 10 seconds for a durable `worker-started` receipt,
+written only after Pi process creation succeeds. `launch_confirmation: started`
+proves process creation, **not** successful work or continued liveness; inspect the
+returned current state and later report. `unconfirmed` means no start was proven:
+no resubmission or fabricated outcome occurs, and normal reconciliation remains
+responsible for a missing wrapper. Further uncertain attempts remain fail-closed.
+Reload the supervisor with workers stopped before using this path. No manual
+`data/` edits or Firstmate commands are required.
 
 ### Continue after repairing a busy worker pane
 

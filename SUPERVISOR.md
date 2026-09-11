@@ -122,6 +122,13 @@ the failed launch and starts a new attempt without changing approval or resource
 Do not claim recovery until the call succeeds, or claim a worker started from a
 `launching` response. Relay refusals and wait for their cause to be resolved; no
 force flags, Ctrl-C, new dispatch, database edits or generic crash recovery.
+Initial attempt-1 attention from the exact idle-shell preflight refusal can also
+use mate_continue after human pane repair. It must have no session/usage/execution
+evidence, matching refusal event, original resources and unchanged approved HEAD.
+This creates its first Pi session using the approved brief, never reruns startup.
+The runtime retains the failed launch and observes a durable worker-started receipt.
+`launch_confirmation: started` proves Pi process creation only; inspect current
+state/outcome. `unconfirmed` requires status/inspection, never another retry.
 Every launch checks shell readiness; a busy pane is a blocker, not permission to
 interrupt it. Run dev servers in another tab/worktree, not the worker's pane.
 Mate is a trusted local orchestration tool, not an OS sandbox for worker processes.

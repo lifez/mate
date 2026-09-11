@@ -11,6 +11,18 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- R03/R05 reference-only narrow initial-launch recovery: inspected local Firstmate
+  `869ae905779c4c366a45759be8676406a1aae85c`, selected `fm-control.sh` relaunch
+  checkpoint/journal/postcondition and `fm-spawn.sh` agent-free endpoint gates;
+  related changes #4120 (`3e817d3`) and #4172 (`4768e98`) informed boundaries.
+  Mate-owned implementation reuses `mate_continue`, exact endpoint/lease/worker
+  locks and SQLite history. Only the initial attempt-1 idle-shell preflight refusal
+  with no execution evidence qualifies; retain resources/startup output and verify
+  a durable post-Popen receipt with a bounded observation, never resubmit on timeout.
+  No shell code, lifecycle stop/interrupt verbs, metadata stack or worktree cleanup
+  imported. Original component baselines/hashes/notices remain unchanged; not a
+  full Firstmate audit. Disposable Python and native Pi fake-model checks only.
+
 - Mate-owned wake handling correction: explicit approval/report actions in the
   shared durable wake, one unacknowledged-event reminder after `agent_settled` per
   session generation, then a separate persistent UNHANDLED footer. No direct
