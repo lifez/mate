@@ -88,6 +88,131 @@ class MateTests(unittest.TestCase):
     def configure_project(self, **settings):
         self.config.write_text(json.dumps(dict(projects={"fixture": dict(repo=str(self.repo), **settings)})))
 
+    def test_same_tab_dispatch_continuation_and_closure(self):
+        calls = []
+        def herdr(task, *args):
+            calls.append(args)
+            if args[:2] == ('pane', 'split'):
+                return {'pane': dict(pane_id='w1:p3', tab_id='w1:t1', workspace_id='w1', terminal_id='split-terminal')}
+            result = self.fake_herdr(task, *args)
+            if args[:2] == ('pane', 'get') and args[2] == 'w1:p3':
+                result['pane']['terminal_id'] = 'split-terminal'
+            return result
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+            task = self.dispatch(same_tab_as='supervisor')
+            self.assertEqual((task['tab'], task['pane']), ('w1:t1', 'w1:p3'))
+            self.assertEqual(task['split_target']['pane'], 'w1:p1')
+            self.assertEqual(m.snapshot(self.db, {})['tasks'][0]['same_tab_as'], 'supervisor')
+            self.assertEqual(self.dispatch(same_tab_as='missing'), task)
+            task['state'] = 'review'
+            with self.db:
+                m.save(self.db, task)
+            resumed = m.resume(self.db, dict(id='fix', message='Check again'))
+            for key in ('pane', 'tab', 'worktree', 'lease', 'same_tab_as', 'endpoint_receipt'):
+                self.assertEqual(resumed[key], task[key])
+            self.assertEqual((self.acquires, self.launches), (1, 2))
+            self.assertEqual(sum(c[:2] == ('pane', 'split') for c in calls), 1)
+            self.assertFalse(any(c[:2] == ('tab', 'create') for c in calls))
+            self.assertTrue(all(c[2] == 'w1:p3' for c in calls if c[:2] == ('pane', 'run')))
+            resumed['state'] = 'review'
+            with self.db:
+                m.save(self.db, resumed)
+            m.complete(self.db, dict(id='fix', attempt=2))
+            with self.assertRaisesRegex(ValueError, 'Shared tab'):
+                m.close_tab(self.db, dict(id='fix', attempt=2, tab='w1:t1'))
+
+    def test_same_tab_target_validation_and_uncertain_split(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        source = self.propose('related')
+        source.update(session=os.environ['HERDR_SESSION'], socket=os.environ['HERDR_SOCKET_PATH'],
+            workspace='w1', tab='w1:t2', pane='w1:p2',
+            endpoint_receipt={'root_pane': {'terminal_id': 'original-terminal'}})
+        with self.db:
+            m.save(self.db, source)
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            for reference in ('missing', 'fix', '', None, 1, '--current'):
+                with self.subTest(reference=reference), self.assertRaises(ValueError):
+                    self.dispatch(same_tab_as=reference)
+            for key, bad in (('session', 'other'), ('socket', '/other'), ('workspace', 'w2'),
+                             ('tab', None), ('pane', None), ('tab_close_state', 'uncertain'),
+                             ('endpoint_receipt', {'root_pane': {'terminal_id': 'reused'}})):
+                with self.subTest(key=key):
+                    with self.db:
+                        m.save(self.db, dict(source, **{key: bad}))
+                    with self.assertRaises(ValueError):
+                        self.dispatch(same_tab_as='related')
+            self.assertEqual(self.acquires, 0)
+            self.assertEqual(m.load(self.db, 'fix')['state'], 'approved')
+            with self.db:
+                m.save(self.db, source)
+        def broken(task, *args):
+            if args[:2] == ('pane', 'split'):
+                saved = m.load(self.db, 'fix')
+                self.assertEqual(saved['split_target']['tab'], 'w1:t2')
+                raise RuntimeError('Lost split response')
+            return self.fake_herdr(task, *args)
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', broken):
+            with self.assertRaisesRegex(RuntimeError, 'Lost split'):
+                self.dispatch(same_tab_as='related')
+            self.assertEqual(self.dispatch()['state'], 'attention')
+            self.assertEqual((self.acquires, self.launches), (1, 0))
+
+    def test_same_tab_acquisition_recovery_keeps_pinned_target(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        def fail_acquire(args, cwd=None, timeout=30):
+            if args[:2] == ['treehouse', 'get']:
+                raise RuntimeError('Fixture acquisition failure')
+            return self.fake_run(args, cwd, timeout)
+        with patch.object(m, 'run', fail_acquire), patch.object(m, 'herdr', self.fake_herdr):
+            with self.assertRaisesRegex(RuntimeError, 'Fixture acquisition'):
+                self.dispatch(same_tab_as='supervisor')
+            failed = m.load(self.db, 'fix')
+            recovered = m.recover_acquire(self.db, failed)  # Test-only synthetic human recovery.
+            self.assertEqual(recovered['split_target'], failed['split_target'])
+        def herdr(task, *args):
+            if args[:2] == ('pane', 'split'):
+                self.assertEqual(args[2], 'w1:p1')
+                return {'pane': dict(pane_id='w1:p3', tab_id='w1:t1', workspace_id='w1', terminal_id='new')}
+            result = self.fake_herdr(task, *args)
+            if args[:2] == ('pane', 'get') and args[2] == 'w1:p3':
+                result['pane']['terminal_id'] = 'new'
+            return result
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+            task = self.dispatch(same_tab_as='missing')
+            self.assertEqual((task['attempt'], task['same_tab_as']), (2, 'supervisor'))
+            self.assertEqual(task['split_target'], failed['split_target'])
+
+    def test_same_tab_recheck_and_bad_receipt_never_launch(self):
+        for case in ('target-moved', 'wrong-tab', 'same-pane', 'same-terminal', 'missing-terminal'):
+            with self.subTest(case=case):
+                ident = case
+                self.propose(ident)
+                m.approve(self.db, dict(id=ident, sha=self.sha))
+                def herdr(task, *args):
+                    if args[:2] == ('pane', 'split'):
+                        pane = dict(pane_id='w1:p3', tab_id='w1:t1', workspace_id='w1', terminal_id='new')
+                        if case == 'wrong-tab': pane['tab_id'] = 'w1:t99'
+                        if case == 'same-pane': pane['pane_id'] = 'w1:p1'
+                        if case == 'same-terminal': pane['terminal_id'] = 'original-terminal'
+                        if case == 'missing-terminal': pane.pop('terminal_id')
+                        return {'pane': pane}
+                    result = self.fake_herdr(task, *args)
+                    if case == 'target-moved' and args[:2] == ('pane', 'get') and task.get('tab') and self.acquires:
+                        result['pane']['tab_id'] = 'w1:t99'
+                    return result
+                with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        self.dispatch(id=ident, same_tab_as='supervisor')
+                    self.assertEqual(m.load(self.db, ident)['state'], 'attention')
+                    self.assertEqual(self.launches, 0)
+                # Remove only this disposable task's journal row to exercise the next case.
+                with self.db:
+                    self.db.execute('DELETE FROM tasks WHERE id=?', (ident,))
+
     def test_snapshot_open_tasks_excludes_complete_before_pagination(self):
         states = ['complete'] * 51 + ['awaiting-base', 'approved', 'running', 'review', 'failed', 'attention']
         records = [dict(id=str(i), state=state, updated=-i, attempt=0) for i, state in enumerate(states)]
@@ -640,6 +765,62 @@ print('fixture-private-output')
         snapshot = m.snapshot(self.db, {})
         self.assertEqual(snapshot['tasks'][0]['completed_at'], completed['completed_at'])
         self.assertEqual(len(snapshot['events']), 1, 'completion must not swallow pending reports')
+
+    def test_force_complete_preserves_evidence_and_safety_gates(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            task.update(state='failed', error='Pi exit=1, settled=False')
+            with self.db:
+                m.save(self.db, task)
+                m.event(self.db, task, 'failed', task['error'])
+            report = self.home / 'fix/report-1.txt'
+            report.write_text('Partial worker report')
+            params = dict(id='fix', attempt=1, force=True)
+            for change in (dict(force='true'), dict(force=1), dict(force=False), dict(attempt=2)):
+                with self.assertRaises(ValueError):
+                    m.complete(self.db, params | change)
+            for change in (dict(state='attention'), dict(state='running'), dict(state='launching'),
+                           dict(state='approved'), dict(state='acquiring'), dict(state='awaiting-base'),
+                           dict(pending_scope={'brief': 'not approved'}),
+                           dict(scope_history=[dict(first_attempt=2)])):
+                with self.db:
+                    m.save(self.db, task | change)
+                with self.assertRaises(ValueError):
+                    m.complete(self.db, params)
+            with self.db:
+                m.save(self.db, task)
+            with m.lock(self.home / 'fix/run.lock'):
+                with self.assertRaisesRegex(ValueError, 'still active'):
+                    m.complete(self.db, params)
+            for gate in ('ready_pane', 'check_lease'):
+                with patch.object(m, gate, side_effect=ValueError('Uncertain identity/processes')):
+                    with self.assertRaisesRegex(ValueError, 'Uncertain'):
+                        m.complete(self.db, params)
+                    self.assertEqual(m.load(self.db, 'fix'), task)
+            with patch.object(m, 'run', return_value='100 1 100 ttys100 zsh -zsh\n120 100 120 ttys100 node pi'):
+                with self.assertRaisesRegex(ValueError, 'background/stopped'):
+                    m.complete(self.db, params)
+            completed = m.complete(self.db, params)
+            self.assertEqual(completed['state'], 'complete')
+            self.assertEqual(completed['completed_via'], 'mate-complete --force')
+            self.assertEqual(completed['completed_from'], 'failed')
+            self.assertTrue(completed['completed_by'])
+            self.assertGreater(completed['completed_at'], 0)
+            for key, value in task.items():
+                if key not in ('state', 'updated'):
+                    self.assertEqual(completed[key], value)
+            self.assertEqual(m.complete(self.db, params), completed)
+            self.assertEqual(m.complete(self.db, dict(id='fix', attempt=1)), completed)
+            self.assertEqual(report.read_text(), 'Partial worker report')
+            self.assertEqual((self.acquires, self.launches), (1, 1))
+        self.db.close(); self.db = m.connect()
+        snapshot = m.snapshot(self.db, {})
+        self.assertEqual(snapshot['tasks'][0]['completed_from'], 'failed')
+        self.assertEqual(snapshot['tasks'][0]['error'], task['error'])
+        self.assertEqual(len(snapshot['events']), 1)
+        self.assertEqual(snapshot['open_tasks'], 0)
 
     def test_pane_process_ownership_not_shared_tty_or_program_name(self):
         self.propose()

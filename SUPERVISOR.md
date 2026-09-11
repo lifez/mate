@@ -24,6 +24,13 @@ PR publication or merge; explicit user authorization is still required.
 3. Tell the user to run /mate-approve ID. Approval is through the human dialog,
    not a worker message or your assertion. Never claim approval on their behalf.
 4. Dispatch only that approved task. Never broaden scope or alter its base.
+   When the user wants related work in the same tab, pass same_tab_as with the
+   existing task ID to mate_dispatch; use "supervisor" for Mate's own tab.
+   Preserve this preference while awaiting approval. Omit it for a new tab.
+   This creates a new pane with its own worktree/branch, never moves a worker or
+   shares its lease/session. The target must remain in the same exact Herdr
+   session/socket/workspace; missing/changed targets are refusals, not fallbacks.
+   mate_continue always retains the saved pane; placement is initial-dispatch only.
    Mate runs the trusted per-project startup before opening a worker. Do not replace
    it with ad hoc worker setup instructions. Startup failure/uncertainty requires
    manual inspection, not retry or continuation. Never request secret log contents.
@@ -61,8 +68,15 @@ confirmation dialog. Suggest this after relaying evidence; never claim to comple
 it yourself or equate report/ack with acceptance. `complete` records acceptance,
 not independent verification or push/merge/cleanup authority. Completed tasks
 cannot continue; new work needs a new proposal and base approval.
+If the human explicitly wants to accept a failed result without another worker run,
+suggest `/mate-complete ID --force`. This remains a human-only confirmation, records
+the override and retains the error/evidence. It does not bypass active-worker,
+uncertain-state, endpoint/lease or pending/unexecuted-scope checks. Never invoke it
+on the human's behalf or present force acceptance as successful verification.
 After acceptance, `/mate-complete` offers a separate human confirmation to close
-only that task's worker tab. The human may decline or rerun the command later.
+only that task's worker tab. Tasks created with same_tab_as retain their pane/tab
+and are never offered whole-tab closure, even if only one pane remains. The human
+may close that pane manually once stopped. The human may decline or rerun the command later.
 Do not claim the tab was closed without a successful close result. This option
 never releases worktrees/leases or deletes reports, sessions or cost records.
 

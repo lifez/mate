@@ -76,8 +76,9 @@ Run `/mate-approve TASK_ID` and review the scope, repository, branch and full SH
 in the confirmation dialog. Declining creates no lease/pane/worker. Accepting
 wakes the supervisor so it can dispatch the approved task.
 
-The worker runs **native interactive pi TUI** in a dedicated Herdr tab and a
-Treehouse-leased worktree. You can see Pi's tool calls, output and response as they
+The worker runs **native interactive pi TUI** in a dedicated Herdr pane and a
+Treehouse-leased worktree. By default Mate creates a new tab; optionally share an
+existing tab as described below. You can see Pi's tool calls, output and response as they
 happen; use Pi's normal expansion/thinking visibility controls. Mate Calm affects
 only the supervisor, not the worker UI.
 
@@ -95,7 +96,7 @@ Code verification/research/review must themselves be delegated.
 
 - `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
 - `/mate-status` — show tasks/events without invoking a model.
-- `/mate-complete ID` — accept a stopped `review` task, then optionally confirm closing its worker tab.
+- `/mate-complete ID [--force]` — accept a stopped `review` task (`--force` also permits `failed`), then optionally confirm closing its worker tab.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
@@ -112,6 +113,40 @@ unstarted-continuation recovery described below. It does not reset or reacquire 
 Human answers to blockers go through the supervisor. Arbitrary live-pane steering
 is intentionally not exposed: inspect a live blocked worker yourself in Herdr
 rather than letting the supervisor blindly approve prompts.
+
+## New worker pane in an existing tab
+
+Ask “Open BE in a new pane in FE's tab.” After normal base approval, Mate can use:
+
+```json
+{"id":"be-task","same_tab_as":"fe-task"}
+```
+
+Pass this to `mate_dispatch`; use `"same_tab_as":"supervisor"` for Mate's own tab.
+Omit the field to create a new tab as before. `supervisor` is a reserved selector,
+not a task lookup. Splits open to the right without changing focus. Each new task
+still gets its own Treehouse lease, worktree, branch and Pi session; sharing a tab
+is only terminal layout, not shared code state or permission to broaden scope.
+
+Mate pins the target's session/socket/workspace/tab/pane/original terminal before
+acquiring resources and checks it again after startup. A task target must have an
+existing original pane in the supervisor's session/socket/workspace. Missing,
+moved, reused or uncertain targets are refused, never silently replaced with a new
+tab. Do not move/close target panes during dispatch. Ambiguous creation remains
+`attention` with its journal/receipt retained; no automatic retry or cleanup.
+
+`mate_status` includes `tab`, `pane` and the saved `same_tab_as` selector. Duplicate
+dispatch does not change placement; `mate_continue` uses the saved worker pane,
+worktree and session without splitting again. Human acquisition recovery retains
+and rechecks the saved target, ignoring new placement overrides.
+
+After `/mate-complete`, tasks created this way **never offer or permit whole-tab
+closure**, even if only their pane remains. Close the stopped pane manually if
+needed. For tasks that originally created a tab, existing extra-pane checks still
+prevent closing a tab containing related workers. No automatic pane cleanup.
+
+Reload the supervisor with workers stopped to load the updated tools/control plane.
+No task-state migration is required; old single-tab tasks retain their behavior.
 
 ## Additional scope in the same worktree
 
@@ -149,7 +184,18 @@ back up stopped state before use and do not downgrade while additions are pendin
 After reviewing the report and any required verification, run `/mate-complete ID`.
 The TUI shows the task scope, base and attempt for your confirmation. Declining
 changes nothing. Acceptance requires state `review` and a released worker lock;
-a changed attempt, active worker, failed or uncertain task cannot be completed.
+a changed attempt, active worker or uncertain task cannot be completed.
+
+To accept existing work despite a failed worker run, use `/mate-complete ID --force`.
+The human dialog warns that the result may be incomplete and shows the saved error.
+This only adds `failed` to the allowed states, not `attention` or active tasks. Under
+the worker lock, Mate checks the original endpoint/terminal, shell/process readiness
+and exact Treehouse lease. Missing, busy or changed resources cause refusal; no
+worker is launched or interrupted. Pending/unexecuted scope additions still block.
+The error, reports, usage and events remain; `completed_via: "mate-complete --force"`
+and `completed_from` record the override alongside the usual time/local account.
+Tab closure still requires its own separate confirmation. Reload the supervisor
+with workers stopped (`/reload`) before using the new flag; no state migration is needed.
 
 `complete` records your acceptance—not automatic proof of correctness. Status
 includes `completed_at` (Unix time), `completed_by` (the local OS account running
@@ -158,7 +204,7 @@ Repeating the command preserves the original record. It is a human command, not
 a model tool; no model call is needed to accept a task.
 
 Completion itself does not acknowledge pending events, push/merge, release the
-Treehouse lease or delete reports. A **separate confirmation** then offers to close
+Treehouse lease or delete reports. For tasks that created their own tab, a **separate confirmation** then offers to close
 the task's worker Herdr tab. Declining keeps the tab; running `/mate-complete ID`
 again on an already-complete task offers closure again without rewriting acceptance.
 

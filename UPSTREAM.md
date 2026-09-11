@@ -11,6 +11,22 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned `/mate-complete ID --force`: human acceptance also permits stopped
+  failed tasks; reuse lock, original pane/process and lease checks, preserve scope
+  gates and failed-run evidence, record override/source state and keep tab closure
+  separately confirmed. No upstream import or provenance baseline change.
+
+- Mate-owned optional `mate_dispatch same_tab_as`: split right/no-focus in an
+  existing task or supervisor tab, with independent worktree/branch/lease/session.
+  Pin/recheck exact target and original terminal; retain native split receipt,
+  support old tab receipts, no fallback/retry/move or shared-tab closure. Saved
+  placement survives continuation/acquisition recovery. Verified Herdr 0.8.0 split
+  CLI/receipt using a disposable named server. No upstream import/baseline change.
+  Checks: 32 Python tests, extension check, localhost fake-model TUI and real
+  Herdr/Treehouse + fake Pi smoke passed (supervisor/task split, continuation and
+  shared-tab closure refusal). Live fixture uses /bin/sh without personal prompt
+  plugins; initial inherited-shell run correctly refused startup background jobs.
+
 - Mate-owned unstarted-continuation recovery through `mate_continue`: original
   pane/shell/process inventory, exact lease/worktree/session and no-execution gates;
   preserve failed-attempt history/events and start a new attempt without reset,

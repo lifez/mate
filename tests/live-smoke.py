@@ -24,7 +24,9 @@ folder = Path(tempfile.mkdtemp(prefix="mate-live-")).resolve()
 name = "mate-test-" + uuid.uuid4().hex[:10]
 env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_") and not k.startswith("MATE_")}
 config = folder / "herdr/config.toml"
-config.parent.mkdir(); config.write_text("")
+config.parent.mkdir()
+# Keep fixture shells independent of personal prompt plugins/background startup jobs.
+config.write_text('[terminal]\ndefault_shell = "/bin/sh"\nshell_mode = "non_login"\n')
 env.update(HERDR_CONFIG_PATH=str(config), MATE_HOME=str(folder / "home"))
 repo = folder / "repo"; repo.mkdir()
 
@@ -38,7 +40,7 @@ def herdr(*args):
     return json.loads(command(["herdr", "--session", name, *args]))
 
 git("init", "-b", "main")
-(repo / "treehouse.toml").write_text('max_trees = 2\nroot = "./"\n')
+(repo / "treehouse.toml").write_text('max_trees = 3\nroot = "./"\n')
 git("add", "treehouse.toml")
 git("-c", "user.name=Mate Test", "-c", "user.email=mate@test.invalid", "commit", "-m", "base")
 fakebin = folder / "bin"; fakebin.mkdir()
@@ -106,8 +108,47 @@ try:
     assert Path(task['worktree']).is_dir()
     assert 'Fixture worker report' in m.snapshot(db, {'id': 'smoke'})['report']['text']
     m.check_lease(task)  # Tab closure must retain its Treehouse lease.
+    for ident, reference in (('split-owner', 'supervisor'), ('split-related', 'split-owner')):
+        proposed = m.propose(db, dict(id=ident, repo=str(repo), base='main', brief='Read-only split fixture.'))
+        m.approve(db, dict(id=ident, sha=proposed['sha']))
+        split = m.dispatch(db, dict(id=ident, provider='openai-codex', model='fake', same_tab_as=reference))
+        assert split['tab'] == created['tab']['tab_id'], split
+        assert split['pane'] != env['HERDR_PANE_ID']
+        assert split['worktree'] != task['worktree']
+        for _ in range(150):
+            split = m.load(db, ident)
+            if split['state'] in ('review', 'failed', 'attention'):
+                break
+            time.sleep(.2)
+        assert split['state'] == 'review', split
+        for _ in range(50):
+            try:
+                m.ready_pane(split)
+                break
+            except ValueError:
+                time.sleep(.1)
+        else:
+            raise AssertionError('Split worker did not return to original shell')
+        if reference == 'supervisor':
+            continued = m.resume(db, dict(id=ident, message='Read-only second fixture run.'))
+            assert continued['pane'] == split['pane'] and continued['lease'] == split['lease']
+            for _ in range(150):
+                split = m.load(db, ident)
+                if split['state'] in ('review', 'failed', 'attention'):
+                    break
+                time.sleep(.2)
+            assert split['state'] == 'review', split
+        m.complete(db, dict(id=ident, attempt=split['attempt']))
+        try:
+            m.close_tab(db, dict(id=ident, attempt=split['attempt'], tab=split['tab']))
+        except ValueError as exc:
+            assert 'Shared tab' in str(exc)
+        else:
+            raise AssertionError('Shared tab closure was allowed')
+        m.check_lease(split)
+    assert herdr('pane', 'get', env['HERDR_PANE_ID'])['result']['pane']['pane_id'] == env['HERDR_PANE_ID']
     ok = True
-    print("PASS: real Herdr subscription/pane + real Treehouse lease + pinned base + fake Pi worker + durable report + duplicate dispatch guard + exact worker tab closure (lease/report/owner pane retained)")
+    print("PASS: shared-tab supervisor/task split + continuation + closure refusal; real Herdr subscription/pane + real Treehouse lease + pinned base + fake Pi worker + durable report + duplicate dispatch guard + exact worker tab closure (lease/report/owner pane retained)")
 finally:
     if db:
         db.close()

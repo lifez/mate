@@ -281,6 +281,29 @@ try {
   execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['attempt']=2\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   await commands['mate-complete'].handler('inspect', { ...ctx, mode: 'rpc' });
   assert.equal((await call('mate_status')).tasks[0].state, 'review', 'TUI only');
+  for (const args of ['', '--force', 'inspect --oops', 'inspect --force extra']) {
+    await commands['mate-complete'].handler(args, ctx);
+    assert.match(notices.at(-1)[0], /Usage:/);
+  }
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(state='failed',error='Pi exit=1, settled=False')\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.match(notices.at(-1)[0], /stopped failed tasks with --force/);
+  await commands['mate-complete'].handler('inspect --force', { ...ctx, mode: 'rpc' });
+  assert.match(notices.at(-1)[0], /Human TUI confirmation/);
+  const forceCtx = { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
+    assert.equal(title, 'Force accept task as complete?');
+    assert.match(body, /FORCE ACCEPTANCE from failed/);
+    assert.match(body, /Pi exit=1, settled=False/);
+    return approval;
+  } } };
+  approval = false;
+  await commands['mate-complete'].handler('inspect --force', forceCtx);
+  assert.match(notices.at(-1)[0], /task remains failed/);
+  approval = true;
+  await commands['mate-complete'].handler('inspect --force', forceCtx);
+  assert.match(notices.at(-1)[0], /'pane'/, 'force reaches backend but refuses this fixture without an endpoint');
+  assert.equal((await call('mate_status')).tasks[0].state, 'failed');
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['state']='review'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   approval = false;
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'review', 'decline preserves review');
@@ -307,6 +330,25 @@ try {
   assert.equal(notices.at(-1)[1], 'error');
   assert.equal((await call('mate_status')).tasks[0].state, 'complete');
   assert.equal(messages.filter(m => m.message.customType === 'mate-tab-closed').length, 0);
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['same_tab_as']='supervisor'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
+  await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => { throw new Error('Must not offer shared-tab closure'); } } });
+  assert.match(notices.at(-1)[0], /Shared tab and worker pane retained/);
+  assert.equal(tools.mate_dispatch.parameters.properties.same_tab_as.type, 'string');
+  assert.match(tools.mate_dispatch.description, /same_tab_as/);
+  await handlers.session_shutdown();
+  // Echo dispatch RPC in the disposable installation only, to test TS argument forwarding.
+  const backend = join(root, 'bin/mate.py');
+  writeFileSync(backend, readFileSync(backend, 'utf8').replace('def dispatch(db, p):', 'def dispatch(db, p):\n    return p'));
+  await handlers.session_start({}, ctx);
+  await wait(() => call('mate_status'));
+  writeFileSync(join(root, 'mate.config.json'), '{}');
+  for (const same_tab_as of ['supervisor', 'inspect', undefined]) {
+    const response = await tools.mate_dispatch.execute('placement', { id: 'next', same_tab_as }, undefined, undefined, ctx);
+    const sent = JSON.parse(response.content[0].text);
+    assert.equal(sent.same_tab_as, same_tab_as);
+    assert.equal(sent.model, 'main-model');
+    if (same_tab_as === undefined) assert.equal('same_tab_as' in sent, false);
+  }
   await handlers.session_shutdown();
   const stopped = messages.length;
   await sleep(2100);

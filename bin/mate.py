@@ -124,6 +124,24 @@ def check_endpoint(task, pane):
     return info
 
 
+def endpoint_pane(task):
+    receipt = task.get("endpoint_receipt", {})
+    return receipt.get("pane", {}) if task.get("same_tab_as") else receipt.get("root_pane", {})
+
+
+def check_split_target(task):
+    target = task["split_target"]
+    if any(not isinstance(target.get(k), str) or not target[k] or target[k].startswith("-")
+           for k in ("session", "socket", "workspace", "tab", "pane", "terminal_id")):
+        raise ValueError("Missing exact split target identity")
+    if any(target.get(k) != task[k] for k in ("session", "socket", "workspace")):
+        raise ValueError("Split target belongs to a different Herdr endpoint")
+    pane = check_endpoint(target, target["pane"])
+    if not target.get("tab") or not target.get("terminal_id") or pane.get("terminal_id") != target["terminal_id"]:
+        raise ValueError("Split target terminal identity changed or is missing")
+    return target
+
+
 def check_lease(task):
     lease = task["lease"]
     if not isinstance(lease, dict) or lease.get("lease_holder") != task["holder"] or not lease.get("lease_id"):
@@ -355,7 +373,21 @@ def dispatch(db, p):
     if not socket_path or not parent or not workspace:
         raise ValueError("Missing exact Herdr caller identity")
     task.update(session=session, socket=socket_path, workspace=workspace)
-    check_endpoint(task, parent)  # Before acquiring anything.
+    caller = check_endpoint(task, parent)  # Before acquiring anything.
+    if not task.get("recoveries") and "same_tab_as" in p:
+        reference = task_id(p["same_tab_as"])
+        if reference != "supervisor" and reference == task["id"]:
+            raise ValueError("Cannot split relative to the task being dispatched")
+        source = task if reference == "supervisor" else load(db, reference)
+        if reference != "supervisor" and source.get("tab_close_state"):
+            raise ValueError("Target tab is closed or closure is uncertain")
+        pane = caller if reference == "supervisor" else endpoint_pane(source)
+        task.update(same_tab_as=reference, split_target=dict(
+            session=source.get("session"), socket=source.get("socket"), workspace=source.get("workspace"),
+            tab=caller.get("tab_id") if reference == "supervisor" else source.get("tab"),
+            pane=parent if reference == "supervisor" else source.get("pane"), terminal_id=pane.get("terminal_id")))
+    if task.get("same_tab_as"):
+        check_split_target(task)
     pi_binary = shutil.which("pi")
     if not pi_binary:
         raise ValueError("pi is not on PATH")
@@ -396,14 +428,25 @@ def dispatch(db, p):
         task["state"] = "launching"
         with db:
             save(db, task)
-        created = herdr(task, "tab", "create", "--workspace", workspace, "--cwd", wt,
-                        "--label", "mate-" + task["id"], "--no-focus")
+        if task.get("same_tab_as"):
+            target = check_split_target(task)  # Recheck after acquisition/startup; never fall back.
+            created = herdr(task, "pane", "split", target["pane"], "--direction", "right", "--cwd", wt, "--no-focus")
+        else:
+            created = herdr(task, "tab", "create", "--workspace", workspace, "--cwd", wt,
+                            "--label", "mate-" + task["id"], "--no-focus")
         task["endpoint_receipt"] = created
         with db:
             save(db, task)
-        task["pane"] = created["root_pane"]["pane_id"]
-        task["tab"] = created["tab"]["tab_id"]
-        check_endpoint(task, task["pane"])
+        pane = endpoint_pane(task)
+        task["pane"] = pane["pane_id"]
+        task["tab"] = target["tab"] if task.get("same_tab_as") else created["tab"]["tab_id"]
+        if task.get("same_tab_as") and (pane.get("tab_id") != task["tab"] or
+                pane.get("workspace_id") != workspace or pane["pane_id"] == target["pane"] or
+                pane.get("terminal_id") == target["terminal_id"]):
+            raise ValueError("Split receipt does not identify a new pane in the target tab")
+        actual = check_endpoint(task, task["pane"])
+        if not pane.get("terminal_id") or actual.get("terminal_id") != pane["terminal_id"]:
+            raise ValueError("Created terminal identity mismatch")
         with db:
             save(db, task)
         launch_worker(task)
@@ -479,7 +522,7 @@ def recover_acquire_cli(ident):
 
 def ready_pane(task):
     pane = check_endpoint(task, task["pane"])
-    original = task.get("endpoint_receipt", {}).get("root_pane", {}).get("terminal_id")
+    original = endpoint_pane(task).get("terminal_id")
     if not original or pane.get("terminal_id") != original:
         raise ValueError("Worker terminal identity changed; inspect the original pane")
     process = herdr(task, "pane", "process-info", "--pane", task["pane"]).get("process_info", {})
@@ -608,8 +651,12 @@ def complete(db, p):
     task = load(db, p["id"])
     if task["state"] == "complete":
         return task  # Repeated confirmation does not rewrite the acceptance record.
-    if task["state"] != "review" or type(p.get("attempt")) is not int or p["attempt"] != task["attempt"]:
-        raise ValueError("Only the reviewed attempt shown in the confirmation can be completed")
+    force = p.get("force", False)
+    if type(force) is not bool:
+        raise ValueError("force must be a boolean")
+    if (task["state"] not in (("review", "failed") if force else ("review",)) or
+        type(p.get("attempt")) is not int or p["attempt"] != task["attempt"]):
+        raise ValueError("Only the reviewed attempt (or stopped failed attempt with --force) shown in the confirmation can be completed")
     history = task.get("scope_history", [])
     if (task.get("pending_scope") or p.get("scope_revision", 0) != len(history) or
         (history and history[-1]["first_attempt"] > task["attempt"])):
@@ -619,10 +666,17 @@ def complete(db, p):
     except BlockingIOError:
         raise ValueError("Worker is still active; wait before completing the task") from None
     try:
+        if force:
+            ready_pane(task)
+            check_lease(task)
+        if load(db, task["id"]) != task:
+            raise ValueError("Task changed during completion checks; confirm again")
         with db:
+            if force:
+                task["completed_from"] = task["state"]
             task.update(state="complete", completed_at=time.time(),
                         completed_by=pwd.getpwuid(os.getuid()).pw_name,
-                        completed_via="mate-complete")
+                        completed_via="mate-complete --force" if force else "mate-complete")
             save(db, task)
     finally:
         guard.close()
@@ -633,6 +687,8 @@ def close_tab(db, p):
     task = load(db, p['id'])
     if task['state'] != 'complete' or p.get('attempt') != task['attempt'] or p.get('tab') != task.get('tab'):
         raise ValueError('Tab closure requires the exact completed task/attempt/tab')
+    if task.get('same_tab_as'):
+        raise ValueError('Shared tab cannot be closed by Mate; retain the pane or close it manually')
     if task.get('tab_close_state') == 'closed':
         return task
     if task.get('tab_close_state') in ('closing', 'uncertain'):
@@ -643,7 +699,7 @@ def close_tab(db, p):
         raise ValueError('Worker is still active; cannot close its tab') from None
     try:
         pane = check_endpoint(task, task['pane'])
-        original = task.get('endpoint_receipt', {}).get('root_pane', {}).get('terminal_id')
+        original = endpoint_pane(task).get('terminal_id')
         if not original or pane.get('terminal_id') != original:
             raise ValueError('Worker terminal identity changed; refusing to close a reused pane')
         tab = herdr(task, 'tab', 'get', task['tab']).get('tab', {})
@@ -740,7 +796,7 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
     else:
         task = load(db, p["id"])
         result["tasks"] = [dict(task, usage_total=usage_total(task))]

@@ -166,6 +166,18 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned human-only /mate-complete ID --force permits stopped failed tasks after original pane/process and exact lease checks under worker lock. Preserve scope/attempt gates, error/reports/events/usage; record completed_via and completed_from, retain separately confirmed tab closure. No upstream import or provenance baseline change.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R05", "R06"],
+      "description": "Mate-owned same_tab_as initial-dispatch placement: new pane in an existing task/supervisor tab, independent worktree/branch/lease/session. Pin and recheck exact target and original terminal; journal native split receipt, preserve legacy tab receipts and saved continuation/recovery placement. Fail closed on uncertain creation; never close shared tabs. Herdr 0.8.0 CLI/receipt inspected with disposable named server. No upstream import or baseline change.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs", "tests/live-smoke.py"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R04", "R05", "R06"],
       "description": "Mate-owned unstarted-continuation recovery through mate_continue after human pane repair: worker lock, original terminal, shell/process inventory, exact lease/worktree/session, no-execution and capacity gates. Retain failed launch history/events and approval/scope/edits; new attempt without reset/startup/acquisition. Shared launch preflight refuses busy panes and enters saved worktree root. Follow-up corrects shared-TTY false positives: check parent/process-group ownership instead, retaining detached task/session and worktree process gates without a program-name whitelist. No generic crash bypass, cleanup, upstream import or provenance baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
