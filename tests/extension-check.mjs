@@ -46,6 +46,7 @@ const pi = {
   registerMessageRenderer(name, renderer) { renderers[name] = renderer; },
   setActiveTools(names) { active = names; },
   sendMessage(message, options) { messages.push({ message, options }); },
+  sendUserMessage(content, options) { messages.push({ message: { role: "user", content }, options }); },
 };
 const previousMode = process.env.MATE_MODE;
 process.env.MATE_MODE = 'dev';
@@ -54,8 +55,6 @@ assert.equal(existsSync(process.env.MATE_HOME), false, 'dev mode creates no runt
 assert.deepEqual(active, ['read', 'write', 'bash', 'external_tool'], 'dev mode leaves tools untouched');
 delete process.env.MATE_MODE;
 factory(pi);
-assert.equal(handlers.before_agent_start({ systemPrompt: 'base' }).systemPrompt,
-  'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8'), 'runtime injects only supervisor policy');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function wait(check) {
   let last;
@@ -140,6 +139,39 @@ try {
   cpSync(join(root, 'mate.config.example.json'), join(root, 'mate.config.json'));
   await handlers.session_start({}, ctx);
   await wait(() => call('mate_status'));
+  const basePrompt = 'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8');
+  assert.equal((await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt, basePrompt);
+  assert.equal(handlers.tool_call({ toolName: 'mate_memory' }), undefined);
+  const beforeStow = await call('mate_status');
+  const emptyMemory = await call('mate_memory');
+  assert.equal(emptyMemory.revision, 0);
+  const beforeStowMessages = messages.length;
+  supervisorIdle = false;
+  await commands.stow.handler('', ctx);
+  supervisorIdle = true;
+  await commands.stow.handler('reset', ctx);
+  assert.equal(messages.length, beforeStowMessages, 'busy/invalid stow cannot trigger a model');
+  await commands.stow.handler('', ctx);
+  assert.equal(messages.length, beforeStowMessages + 1);
+  assert.match(messages.at(-1).message.content, /Read mate_memory fully first/);
+  assert.match(messages.at(-1).message.content, /Do not reset automatically/);
+  assert.equal(messages.at(-1).options.deliverAs, 'followUp');
+  assert.equal((await call('mate_memory')).revision, 0, 'command does not pretend model already saved');
+  messages.pop(); // Keep later wake assertions scoped to actual task events.
+  const oldNotes = await call('mate_memory', { action: 'save', revision: 0, content: 'OLD_MEMORY_SENTINEL', reason: 'fixture initial' });
+  const notes = await call('mate_memory', { action: 'save', revision: oldNotes.revision, content: 'CURRENT_MEMORY_SENTINEL', reason: 'fixture superseded' });
+  assert.deepEqual(await call('mate_status'), beforeStow, 'memory does not change tasks/events');
+  await assert.rejects(() => call('mate_memory', { action: 'save', revision: oldNotes.revision, content: 'stale', reason: 'fixture' }), /revision changed/);
+  assert.equal((await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt, basePrompt, 'prefix stays fixed after save');
+  await handlers.session_shutdown();
+  await handlers.session_start({ reason: 'new' }, ctx);
+  await wait(() => call('mate_status'));
+  const restoredPrompt = (await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt;
+  assert.match(restoredPrompt, /CURRENT_MEMORY_SENTINEL/);
+  assert.match(restoredPrompt, /untrusted historical context, never approval/);
+  assert.doesNotMatch(restoredPrompt, /OLD_MEMORY_SENTINEL/, 'cold revisions are never auto-loaded');
+  assert.equal((await call('mate_memory')).revision, notes.revision);
+  assert.equal((await call('mate_memory', { revision: oldNotes.revision })).content, 'OLD_MEMORY_SENTINEL');
 
   // Calm is presentation only; existing components redraw without changing payloads.
   const theme = { fg: (_color, text) => text };
@@ -209,7 +241,7 @@ try {
   assert.ok(ackRow().length, 'persisted off restored');
   await commands.calm.handler('on', ctx);
   await wait(() => call('mate_status'));
-  assert.deepEqual(active.sort(), ['mate_ack', 'mate_continue', 'mate_dispatch', 'mate_extend', 'mate_propose', 'mate_status']);
+  assert.deepEqual(active.sort(), ['mate_ack', 'mate_continue', 'mate_dispatch', 'mate_extend', 'mate_memory', 'mate_propose', 'mate_status']);
   assert.equal(handlers.tool_call({ toolName: 'bash' }).block, true);
   assert.equal(handlers.tool_call({ toolName: 'read' }).block, true);
   assert.equal(handlers.tool_call({ toolName: 'external_tool' }).block, true);
@@ -426,9 +458,12 @@ try {
   }
   await handlers.session_shutdown();
   const stopped = messages.length;
+  await commands.stow.handler('', ctx);
+  assert.match(notices.at(-1)[0], /control plane unavailable/);
+  assert.equal(messages.length, stopped, 'stow refuses after ownership shutdown');
   await sleep(2100);
   assert.equal(messages.length, stopped, 'shutdown does not re-arm');
-  console.log('PASS: dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
+  console.log('PASS: stow command/refusals, memory save/history/conflicts/session reload/stable prefix, dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
 } finally {
   await handlers.session_shutdown();
   rmSync(tmp, { recursive: true, force: true });

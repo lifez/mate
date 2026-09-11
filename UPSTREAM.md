@@ -11,6 +11,23 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned `/stow` and `mate_memory`, referencing Firstmate's internal and public
+  stow skills at local commit `869ae905779c4c366a45759be8676406a1aae85c` (both read in
+  full; no fetch). Selected concepts: inspect-before-update, whole-memory curation,
+  preserve open next steps, cold recovery and honest reset-safety receipt. New Mate
+  implementation uses a bounded current note and append-only SQLite `memories`
+  revisions, exact-revision replacement, fixed per-session startup snapshot, and
+  the existing supervisor-owned RPC/tool boundary. No task/event/approval mutation,
+  automatic reset, filesystem write tool, secondmate cascade, tier/decay engine or
+  external routing. Byte limit is not provider token accounting; curation and the
+  completeness verdict are model judgments. Sources: `.agents/skills/stow/SKILL.md`
+  blob `ed32e020fee0f183b5f3a551fd437780291312ef`, `skills/stow/SKILL.md` blob
+  `b45ebe8fd9b59161e6f67fabb4d19cd6e53665d0`. Reference-only; no source code copied
+  and no existing provenance baseline advanced. Additive table only; reload with
+  workers stopped, retain the table on rollback. Disposable tests cover size,
+  conflicts, idempotence, cold history, failed-save preservation, command refusal,
+  new-session loading, stable prefix, no task/event changes and dev-mode no-op.
+
 - R03/R05 reference-only narrow initial-launch recovery: inspected local Firstmate
   `869ae905779c4c366a45759be8676406a1aae85c`, selected `fm-control.sh` relaunch
   checkpoint/journal/postcondition and `fm-spawn.sh` agent-free endpoint gates;

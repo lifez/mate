@@ -101,9 +101,10 @@ Code verification/research/review must themselves be delegated.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
+- `/stow` — curate and save private memory/open next steps before a session reset (uses the current model; no automatic reset).
 
 The supervisor gets only `mate_propose`, `mate_dispatch`, `mate_status`,
-`mate_continue`, `mate_extend`, `mate_ack`. The Mate extension selects this tool allowlist and
+`mate_continue`, `mate_extend`, `mate_ack`, `mate_memory`. The Mate extension selects this tool allowlist and
 blocks other model tool calls. Normal pi global extensions/skills still load;
 Mate does not disable their own startup hooks or background behavior. Only load
 global extensions you trust to coexist with the supervisor.
@@ -264,6 +265,49 @@ This is scoped to Mate's own tool/message rendering—not Firstmate's full UI:
 no thinking suppression, global tool patches or boat animation. Hidden custom
 messages may leave a blank spacer. Use `/calm off` before `/export` or `/share`
 if you want full rendered orchestration history; raw session content is retained.
+
+## Stow: memory across supervisor sessions
+
+Run `/stow` after Mate settles. It asks the current supervisor model to read existing
+notes, capture preferences, evidence-backed decisions/learnings and unfinished next
+steps, and consolidate them into **at most 12,000 UTF-8 bytes**. This is a byte budget,
+not an exact token estimate. It preserves requested task settings and references to
+authoritative tasks/reports rather than copying full reports. Unfiled requests remain
+explicitly unapproved; stowing does not launch workers or change task scope.
+
+`mate_memory` reads/saves only this home's private notes in
+`$MATE_HOME/mate.sqlite3` (`memories` table). A save requires the exact revision read;
+stale replacements and over-budget content fail without changing memory. Every
+changed revision is retained atomically with its change reason and UTC time. Cold
+revisions are never auto-loaded; `mate_memory` with `revision` reads one on demand.
+No arbitrary filesystem access, global memory, new skills or external publication.
+Keep credentials/secrets out of notes, just as with ordinary conversation history.
+
+Review the stow receipt for saved revision, bytes before/after and unresolved
+preservation issues. **Only after a successful handoff, use `/new` yourself** (same
+`MATE_HOME`). Current notes load on the next model turn without a separate model
+call; the loaded snapshot remains fixed for that session's system-prompt prefix.
+Saves remain visible through tool results; `/new`, `/resume`, `/reload` or
+`/mate-reconnect` refresh the loaded snapshot. A failed memory load is reported,
+not treated as successful restoration. Dev sessions and workers do not load these
+supervisor notes.
+
+Stowing itself does **not** shrink/compact the current conversation, acknowledge
+pending events, approve/complete/cancel tasks or stop workers. Durable task/event
+recovery stays unchanged. Notes are historical context, never approval or current
+state; Mate must inspect `mate_status` before acting on a remembered task. "Safe to
+reset" is the model's assessment that visible conversation findings were captured,
+not proof of completeness, task verification or recovery of already-lost context.
+
+This selectively adapts Firstmate's inspect-before-update, curation, cold-history
+and honest-handoff pattern—not its secondmate cascade, tier/decay engine or automatic
+knowledge routing. Curation is model-directed on request, with a runtime-enforced
+size/revision boundary; no background sweeps or new dependencies. Historical
+revisions accumulate on disk, not in the prompt.
+
+Install with workers stopped, then `/reload` the supervisor. The additive
+`memories` table is created automatically; existing task/event rows are untouched.
+Back up stopped state before upgrading. No manual task migration is required.
 
 ## Worker defaults and per-task overrides
 
@@ -612,7 +656,7 @@ Default: `mate/data/` (gitignored, private permissions). Override with an absolu
 `MATE_HOME` when launching; keep it stable between supervisor sessions.
 
 ```text
-data/mate.sqlite3                  task journal + events + handling notes
+data/mate.sqlite3                  task journal + events + handling notes + memory revisions
 data/supervisor.lock               kernel-held ownership lock
 data/calm                          persistent Calm presentation preference
 data/<id>/session.jsonl            worker pi session (reused on continuation)

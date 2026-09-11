@@ -50,6 +50,43 @@ class MateTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    def test_stow_memory_budget_history_conflicts_and_task_independence(self):
+        self.propose()
+        before = m.snapshot(self.db, {})
+        empty = m.memory(self.db, {})
+        self.assertEqual(empty['revision'], 0)
+        first = m.memory(self.db, dict(action='save', revision=0, content='## Preferences\nตอบภาษาไทย', reason='User preference'))
+        self.assertEqual(first['bytes'], len(first['content'].encode('utf-8')))
+        self.assertEqual(m.memory(self.db, dict(action='save', revision=first['revision'], content=first['content'], reason='unchanged')), first)
+        for invalid in [dict(revision=0, content='stale', reason='stale'),
+                        dict(revision=True, content='bad', reason='invalid'),
+                        dict(revision=first['revision'], content='ก' * 4001, reason='too large'),
+                        dict(revision=first['revision'], content=' ', reason='empty'),
+                        dict(revision=first['revision'], content='new', reason=''),
+                        dict(content='new', reason='missing revision')]:
+            with self.assertRaises(ValueError):
+                m.memory(self.db, dict(action='save', **invalid))
+            self.assertEqual(m.memory(self.db, {}), first)
+        second = m.memory(self.db, dict(action='save', revision=first['revision'], content='x' * 12000, reason='Consolidated fixture'))
+        self.assertEqual(second['bytes'], second['budget_bytes'])
+        self.assertEqual(m.memory(self.db, dict(revision=first['revision'])), first)
+        with self.assertRaises(ValueError):
+            m.memory(self.db, dict(revision=999))
+        with self.assertRaises(ValueError):
+            m.memory(self.db, dict(action='delete'))
+        self.assertEqual(m.snapshot(self.db, {}), before)
+        self.db.close()
+        self.db = m.connect()
+        self.assertEqual(m.memory(self.db, {}), second)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM memories').fetchone()[0], 2)
+        # A failed insert must preserve both active and cold memory.
+        self.db.execute("CREATE TRIGGER refuse_memory BEFORE INSERT ON memories BEGIN SELECT RAISE(ABORT, 'fixture disk failure'); END")
+        self.db.commit()
+        with self.assertRaisesRegex(Exception, 'fixture disk failure'):
+            m.memory(self.db, dict(action='save', revision=second['revision'], content='lost', reason='failure'))
+        self.assertEqual(m.memory(self.db, {}), second)
+        self.assertEqual(m.memory(self.db, dict(revision=first['revision'])), first)
+
     def propose(self, ident="fix"):
         return m.propose(self.db, dict(id=ident, repo=str(self.repo), base="main", brief="Investigate locally; report evidence. Do not push."))
 

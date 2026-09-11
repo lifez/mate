@@ -55,6 +55,9 @@ def connect():
     db.execute("""CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT, attempt INTEGER,
         kind TEXT, note TEXT, ack TEXT, UNIQUE(task, attempt, kind))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS memories (
+        revision INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
+        reason TEXT NOT NULL, saved_at TEXT NOT NULL)""")
     db.commit()
     return db
 
@@ -1097,6 +1100,36 @@ def snapshot(db, p):
     return result
 
 
+def memory(db, p):
+    """Bounded current notes, append-only cold history; never task/event authority."""
+    action = p.get("action", "read")
+    revision = p.get("revision")
+    if action not in ("read", "save") or (revision is not None and (type(revision) is not int or revision < 0)):
+        raise ValueError("Invalid memory action/revision")
+    with db:
+        # Same transaction covers comparison + append, including non-server callers.
+        db.execute("BEGIN IMMEDIATE")
+        current = db.execute("SELECT revision,content,reason,saved_at FROM memories ORDER BY revision DESC LIMIT 1").fetchone()
+        if action == "save":
+            content = text(p.get("content"), "memory content", 12000)
+            if len(content.encode("utf-8")) > 12000:
+                raise ValueError("Memory exceeds 12000 UTF-8 bytes; curate before saving")
+            reason = text(p.get("reason"), "memory change reason", 1000)
+            if revision != (current[0] if current else 0):
+                raise ValueError("Memory revision changed; read current memory before saving")
+            if not current or content != current[1]:
+                db.execute("INSERT INTO memories(content,reason,saved_at) VALUES (?,?,?)",
+                           (content, reason, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+            current = db.execute("SELECT revision,content,reason,saved_at FROM memories ORDER BY revision DESC LIMIT 1").fetchone()
+        elif revision is not None:
+            current = db.execute("SELECT revision,content,reason,saved_at FROM memories WHERE revision=?", (revision,)).fetchone()
+            if not current:
+                raise ValueError("Unknown memory revision")
+        record = dict(zip(("revision", "content", "reason", "saved_at"), current)) if current else dict(revision=0, content="", reason="", saved_at=None)
+    return dict(record, bytes=len(record["content"].encode("utf-8")), budget_bytes=12000,
+                storage=str(HOME / "mate.sqlite3") + "#memories")
+
+
 def acknowledge(db, p):
     note = text(p["note"], "handling note", 2000)
     if not isinstance(p["events"], list) or not p["events"] or len(p["events"]) > 50:
@@ -1200,7 +1233,7 @@ def serve():
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
     methods = dict(propose=propose, approve=approve, propose_scope=propose_scope, review_scope=review_scope,
                    dispatch=dispatch, resume=resume, inspect_cancel=inspect_cancel, cancel=cancel,
-                   status=snapshot, ack=acknowledge, complete=complete, close_tab=close_tab)
+                   status=snapshot, memory=memory, ack=acknowledge, complete=complete, close_tab=close_tab)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
     native = NativeEvents(db, selector)

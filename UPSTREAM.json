@@ -166,6 +166,18 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned /stow and mate_memory: model-directed inspect-before-update curation, bounded 12000-byte current notes and append-only cold revisions in SQLite, revision-checked saves, per-session stable startup snapshot, honest handoff with manual /new. No task/event/approval mutation, automatic reset, arbitrary file access, tier/decay engine, secondmate cascade or external routing. Additive memories table; reload with workers stopped. Reference-only concepts, no source code copied or existing baseline advanced.",
+      "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
+      "reviewed_scope": "Internal and public stow skills read completely; selected curation, open-record preservation, cold recovery and reset-safety contracts only. No helper implementation imported or full dependency audit.",
+      "sources": [
+        { "path": ".agents/skills/stow/SKILL.md", "blob": "ed32e020fee0f183b5f3a551fd437780291312ef", "mode": "reference-only" },
+        { "path": "skills/stow/SKILL.md", "blob": "b45ebe8fd9b59161e6f67fabb4d19cd6e53665d0", "mode": "reference-only" }
+      ],
+      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "SUPERVISOR.md", "README.md", "tests/extension-check.mjs", "tests/test_mate.py"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R03", "R05"],
       "description": "Reference-only Firstmate relaunch journal and postcondition pattern; Mate-owned narrow initial attempt-1 idle-shell preflight recovery via mate_continue. Fail closed on execution evidence, identity/lease/process uncertainty or changed HEAD; retain full old attempt and resources, no startup rerun. Observe durable post-Popen worker-started receipt for up to 10 seconds, never retry on timeout. No upstream shell code imported; original baselines retained.",
       "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
