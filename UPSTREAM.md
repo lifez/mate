@@ -11,6 +11,12 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned per-project `base_branch` + startup config: exact resolved repo matching,
+  mandatory configured branch → human-approved pinned SHA, no fetch/repin; setup argv
+  runs once after checkout/before worker, private output and fail-closed recovery.
+  Continuation never reruns setup; no new upstream import. Python regression suite
+  (20 tests), extension check and localhost fake-model TUI smoke passed.
+
 - Supervisor-only tool allowlist และ human-only base approval dialog
 - Mate-owned `MATE_MODE=dev pi`: ไม่ register supervisor hooks/tools/commands/watcher;
   ย้าย policy runtime ไป `SUPERVISOR.md`, `AGENTS.md` เป็น development guidance

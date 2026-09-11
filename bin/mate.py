@@ -19,6 +19,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 HOME = Path(os.environ.get("MATE_HOME", ROOT / "data")).expanduser().resolve()
+CONFIG = ROOT / "mate.config.json"
 
 
 def run(args, cwd=None, timeout=30):
@@ -132,23 +133,129 @@ def check_lease(task):
         raise ValueError("Treehouse no longer confirms this task's exact lease")
 
 
+def project_config(repo):
+    """Trusted Mate config only; never discover executable config in a worker repo."""
+    config = json.loads(CONFIG.read_text())
+    if not isinstance(config, dict) or set(config) - {"worker", "projects"}:
+        raise ValueError("Invalid Mate config")
+    projects = config.get("projects", {})
+    if not isinstance(projects, dict):
+        raise ValueError("Invalid projects config")
+    selected, seen = {}, set()
+    for name, project in projects.items():
+        text(name, "project name", 256)
+        if not isinstance(project, dict) or set(project) - {"repo", "base_branch", "startup"}:
+            raise ValueError("Invalid project config")
+        path = Path(text(project.get("repo"), "project repo", 4096)).expanduser()
+        if not path.is_absolute():
+            raise ValueError("Project repo must be an absolute path (or ~/path)")
+        path = str(path.resolve())
+        if path in seen:
+            raise ValueError("Duplicate project repo")
+        seen.add(path)
+        if "base_branch" in project:
+            branch = text(project["base_branch"], "base_branch", 256)
+            if branch.startswith(("-", "refs/")) or any(c.isspace() for c in branch):
+                raise ValueError("base_branch must be a short local or remote-tracking branch name")
+            git(ROOT, "check-ref-format", "refs/heads/" + branch)
+        if "startup" in project:
+            startup = project["startup"]
+            if not isinstance(startup, dict) or set(startup) - {"command", "timeout_seconds"}:
+                raise ValueError("Invalid startup config")
+            command = startup.get("command")
+            if not isinstance(command, list) or not command or len(command) > 128:
+                raise ValueError("Startup command must be a nonempty argv list")
+            for arg in command:
+                text(arg, "startup argument", 4096)
+            timeout = startup.get("timeout_seconds", 30)
+            if type(timeout) is not int or not 1 <= timeout <= 120:
+                raise ValueError("Startup timeout_seconds must be an integer from 1 to 120")
+        if path == repo:
+            selected = dict(project, repo=path, name=name)
+    return selected
+
+
+def branch_ref(repo, branch):
+    refs = git(repo, "for-each-ref", "--format=%(refname)\t%(symref)", "refs/heads", "refs/remotes")
+    matches = [line.split("\t")[0] for line in refs.splitlines()
+               if line.split("\t")[0] in ("refs/heads/" + branch, "refs/remotes/" + branch)
+               and not line.partition("\t")[2]]
+    if len(matches) != 1:
+        raise ValueError("Configured base_branch must identify exactly one existing branch, not a tag/SHA/symbolic ref")
+    return matches[0]
+
+
+def startup_worktree(db, task):
+    startup = task.get("startup")
+    if not startup:
+        return
+    task.update(startup_state="running", startup_started_at=time.time())
+    with db:
+        save(db, task)  # Crash here is uncertain, never permission to run it again.
+    child = None
+    try:
+        log_path = HOME / task["id"] / "startup.log"
+        with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as log:
+            child = subprocess.Popen(startup["command"], cwd=task["worktree"],
+                                     env=dict(os.environ, MATE_REPO=task["repo"],
+                                              MATE_WORKTREE=task["worktree"], MATE_TASK_ID=task["id"]),
+                                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+            task["startup_pid"] = child.pid
+            with db:
+                save(db, task)
+            code = child.wait(timeout=startup.get("timeout_seconds", 30))
+            task["startup_exit_code"] = code
+            if code:
+                raise RuntimeError("Startup exited unsuccessfully")
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise RuntimeError("Startup left background processes")
+        task.update(startup_state="succeeded", startup_finished_at=time.time())
+        with db:
+            save(db, task)
+    except BaseException as exc:
+        # Kill only our new process group. Detached descendants cannot be proven gone:
+        # keep attention and forbid continuation/retry even after successful cleanup.
+        if child:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=2)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+        task.update(startup_state="uncertain" if not isinstance(exc, Exception) else "failed",
+                    startup_finished_at=time.time())
+        with db:
+            save(db, task)
+        if not isinstance(exc, Exception):
+            raise
+        raise RuntimeError("Startup failed or timed out; inspect private startup.log and processes. No automatic retry.") from None
+
+
 def propose(db, p):
     ident = task_id(p["id"])
     repo = str(Path(text(p["repo"], "repo", 4096)).expanduser().resolve())
-    base = text(p["base"], "base", 256)
-    if base.startswith("-") or any(c.isspace() for c in base):
-        raise ValueError("Base must be an explicit Git ref, not options")
     brief = text(p["brief"], "brief")
     if git(repo, "rev-parse", "--show-toplevel") != repo:
         raise ValueError("Use the repository root")
     old = db.execute("SELECT data FROM tasks WHERE id=?", (ident,)).fetchone()
     if old:
         existing = json.loads(old[0])
-        if (existing["repo"], existing["base"], existing["brief"]) != (repo, base, brief):
+        if (existing["repo"], existing["base"], existing["brief"]) != (repo, p.get("base", existing["base"]), brief):
             raise ValueError("Task ID already exists with different scope; choose a new ID")
         return existing  # Retrying a tool call does not change its approved SHA.
-    sha = git(repo, "rev-parse", "--verify", "--end-of-options", base + "^{commit}")
-    task = dict(id=ident, repo=repo, base=base, sha=sha, brief=brief,
+    project = project_config(repo)
+    configured = project.get("base_branch")
+    base = text(p.get("base", configured), "base (required without project base_branch)", 256)
+    if base.startswith("-") or any(c.isspace() for c in base):
+        raise ValueError("Base must be an explicit Git ref, not options")
+    if configured and base != configured:
+        raise ValueError(f"Project requires base_branch {configured}")
+    ref = branch_ref(repo, configured) if configured else base
+    sha = git(repo, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}")
+    task = dict(id=ident, repo=repo, base=base, base_branch=configured, base_ref=ref, sha=sha, brief=brief,
                 state="awaiting-base", attempt=0, branch=f"mate/{ident}-{uuid.uuid4().hex[:8]}")
     with db:
         save(db, task)
@@ -190,6 +297,10 @@ def dispatch(db, p):
     if task["state"] != "approved":
         return task  # Never re-acquire after an interrupted/ambiguous operation.
     profile = worker_profile(p)
+    project = project_config(task["repo"])
+    configured = project.get("base_branch")
+    if configured != task.get("base_branch") or (configured and branch_ref(task["repo"], configured) != task.get("base_ref")):
+        raise ValueError("Project base_branch changed; propose a new task and approve its base")
     check_capacity(db)
     if os.environ.get("HERDR_ENV") != "1":
         raise ValueError("Start Mate inside Herdr")
@@ -204,7 +315,7 @@ def dispatch(db, p):
     pi_binary = shutil.which("pi")
     if not pi_binary:
         raise ValueError("pi is not on PATH")
-    task.update(pi_binary=pi_binary, **profile,
+    task.update(project=project.get("name"), startup=project.get("startup"), pi_binary=pi_binary, **profile,
                 state="acquiring", attempt=1, holder=f"mate:{uuid.uuid4().hex}")
     (HOME / task["id"]).mkdir(mode=0o700)
     with db:
@@ -228,6 +339,14 @@ def dispatch(db, p):
         git(wt, "-c", "core.hooksPath=/dev/null", "switch", "-c", task["branch"], task["sha"])
         if git(wt, "rev-parse", "HEAD") != task["sha"]:
             raise ValueError("Worktree HEAD differs from approved commit")
+        startup_worktree(db, task)
+        if task.get("startup"):
+            check_lease(task)
+            if (git(wt, "rev-parse", "--show-toplevel") != wt or
+                git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir") != git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir") or
+                git(wt, "rev-parse", "HEAD") != task["sha"] or
+                git(wt, "symbolic-ref", "HEAD") != "refs/heads/" + task["branch"]):
+                raise ValueError("Startup changed worktree identity or approved HEAD/branch")
         task["state"] = "launching"
         with db:
             save(db, task)
@@ -412,7 +531,7 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t)} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t)} for t in result["tasks"]]
     else:
         task = load(db, p["id"])
         result["tasks"] = [dict(task, usage_total=usage_total(task))]

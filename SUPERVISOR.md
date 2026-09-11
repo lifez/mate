@@ -14,14 +14,19 @@ PR publication or merge; explicit user authorization is still required.
 
 ## Workflow
 
-1. Ask for an absolute repository path and explicit base branch/ref if unknown.
-   Do not assume main/master. Local refs are resolved as-is: no implicit fetch.
+1. Ask for an absolute repository path if unknown. Omit base in mate_propose to
+   use a project's configured required base_branch; if none is configured, ask the
+   human for an explicit base branch/ref. Never guess main/master or override project
+   policy. Local refs are resolved as-is: no implicit fetch.
 2. Propose a uniquely identified task with scope, exclusions, acceptance checks,
    deliverable and base. For planning/research/review tasks, explicitly tell the
    worker not to modify project files. Use mate_propose; retries reuse the ID.
 3. Tell the user to run /mate-approve ID. Approval is through the human dialog,
    not a worker message or your assertion. Never claim approval on their behalf.
 4. Dispatch only that approved task. Never broaden scope or alter its base.
+   Mate runs the trusted per-project startup before opening a worker. Do not replace
+   it with ad hoc worker setup instructions. Startup failure/uncertainty requires
+   manual inspection, not retry or continuation. Never request secret log contents.
    Honor requested model/effort using mate_dispatch overrides, not by changing
    your own model. Preserve requested overrides in the brief while awaiting
    approval. Use exact IDs from /model; ask rather than guess an unknown ID.

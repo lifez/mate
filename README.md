@@ -211,6 +211,81 @@ make that provider part of your OpenAI subscription.
 Custom providers must be available to both the supervisor's model registry (for
 profile validation) and the worker; worker-only provider registration is insufficient.
 
+## Per-project base branch and startup
+
+Add `projects` beside `worker` in Mate's `mate.config.json` (shipped as `{}`;
+no project commands run until you explicitly configure them):
+
+```json
+{
+  "projects": {
+    "migrate-admin": {
+      "repo": "/Users/win/mine/migrate-admin",
+      "base_branch": "origin/migration",
+      "startup": {
+        "command": ["python3", "/absolute/path/to/mate/examples/copy-env.py", "/absolute/path/to/source.env"],
+        "timeout_seconds": 30
+      }
+    }
+  }
+}
+```
+
+Merge this into the existing file; keep your `worker` defaults. The project name
+is a label. `repo` must be an absolute local Git repository root (including `~/...`);
+symlinks are resolved before exact matching. Relative paths, Git URLs, glob matching
+and duplicate resolved repo mappings are not supported. No implicit project discovery.
+
+`base_branch` and `startup` are independently optional:
+
+- With `base_branch`, omit `base` from `mate_propose`; a conflicting explicit base
+  is refused. Use a short local branch (`migration`) or remote-tracking branch
+  (`origin/migration`), not `refs/...`, a tag, SHA or symbolic ref such as `origin/HEAD`.
+  Missing or ambiguous branches fail. Mate never fetches: fetch yourself for fresh refs.
+- Proposal resolves the branch to a SHA. Human approval is still mandatory and pins
+  that SHA even if the branch subsequently moves. Workers write to a separate
+  `mate/...` task branch, never automatically onto the configured base branch.
+- Changing/removing/adding the project's required base policy before dispatch
+  requires a new proposal and approval. No automatic rebase, merge or repinning.
+  Without `base_branch`, the task must still supply an explicit base as before.
+- Startup is read/validated on initial dispatch, saved with the task, and run after
+  lease/identity checks and switching to the approved task branch, before creating
+  a Herdr tab or starting Pi. This includes pooled worktrees reused by Treehouse.
+  Invalid project config fails before acquiring resources.
+- Command is a nonempty argv array, not implicit shell syntax. Use
+  `["/bin/sh", "/absolute/path/to/setup.sh"]` for a shell script. Arguments do not
+  expand `~`, `$VAR` or globs; scripts may read the provided environment themselves.
+  `cwd` is the task worktree. `MATE_REPO`, `MATE_WORKTREE` and `MATE_TASK_ID` are set;
+  other environment is inherited. stdin is closed (no interactive prompts).
+- Timeout defaults to 30 seconds; allowed range is **1–120 integer seconds**.
+  Setup must exit, not start background services. Dispatch RPC allows up to 15 minutes
+  for acquisition, bounded setup and identity checks (other RPCs retain 3 minutes).
+  The serial control plane pauses polling while setup runs; durable outcomes remain.
+- Startup must preserve the approved HEAD, task branch and repository identity.
+  Setup may create files; ensure env files are ignored by Git before approval.
+- Nonzero exit, timeout or uncertain interruption prevents worker launch. The task
+  becomes `attention` (after reconciliation for a hard crash); lease/worktree and
+  journal remain. No automatic rerun, rollback, reset or resource return.
+  Timeout/error kills only the startup's owned process group. Detached descendants
+  or a hard-killed supervisor can leave processes behind: inspect manually.
+- Duplicate dispatch and `mate_continue` **never rerun startup**. Continuation keeps
+  the same worktree/session/base even after config changes. Status with an `id`
+  includes saved startup config, state, timestamps, PID and exit code when available.
+  stdout/stderr go to private `data/<id>/startup.log`, not tool results/model context.
+
+Example: [`examples/copy-env.py`](examples/copy-env.py) copies the supplied source
+into `.env.local` in the worktree with permission `0600`. It checks Git ignore rules
+and refuses an existing destination (including symlinks), rather than overwriting
+pooled env files blindly. Inspect any existing file before replacing it yourself.
+The source path and destination filename can be adapted in your own trusted script.
+
+Config and scripts are **trusted local code, not sandboxed**. Keep secrets out of
+command arguments/config and never print them. Mate saves command paths/arguments,
+not a snapshot/hash of external script contents; edits to those scripts affect future
+initial dispatches. Treehouse's own setup hooks may also run before Mate's startup.
+After installing this runtime change, reload/restart the supervisor with workers
+stopped; subsequent project config edits are read without restarting.
+
 ## Per-task usage and estimated cost
 
 Worker usage is persisted in the task journal after each finalized assistant message,
@@ -311,6 +386,7 @@ data/<id>/events-<attempt>.jsonl    selected Pi lifecycle/message/tool events
 data/<id>/stderr-<attempt>.log      provider/CLI errors
 data/<id>/report-<attempt>.txt      retained worker outcome
 data/<id>/run.lock                 live wrapper ownership
+data/<id>/startup.log              private project setup output (never auto-delivered)
 ```
 
 `mate_status` returns 50 tasks per page (`task_offset`), 50 pending events per batch,

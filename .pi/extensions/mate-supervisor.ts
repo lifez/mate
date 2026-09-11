@@ -41,8 +41,9 @@ export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: stri
   try { config = JSON.parse(readFileSync(configPath, "utf8")); }
   catch (error) { throw new Error(`Cannot read ${configPath}: ${String(error)}`); }
   const object = (value: any) => value !== null && typeof value === "object" && !Array.isArray(value);
-  if (!object(config) || Object.keys(config).some(key => key !== "worker") ||
-    (config.worker !== undefined && !object(config.worker))) throw new Error(`Invalid worker config: ${configPath}`);
+  if (!object(config) || Object.keys(config).some(key => !["worker", "projects"].includes(key)) ||
+    (config.worker !== undefined && !object(config.worker)) ||
+    (config.projects !== undefined && !object(config.projects))) throw new Error(`Invalid worker config: ${configPath}`);
   const worker = config.worker ?? {};
   if (Object.keys(worker).some(key => !["model", "effort"].includes(key)) ||
     (worker.model !== undefined && (typeof worker.model !== "string" || !worker.model.trim() || worker.model !== worker.model.trim())) ||
@@ -87,7 +88,7 @@ export default function (pi: ExtensionAPI) {
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(new Error("Mate operation timed out. Do not retry dispatch blindly; inspect /mate-status."));
-      }, 180000);
+      }, method === "dispatch" ? 900000 : 180000); // Acquire + bounded startup + identity checks.
       pending.set(id, { resolve: resolveCall, reject, timeout });
       child.stdin.write(JSON.stringify({ id, method, params }) + "\n", (error) => {
         if (error) { clearTimeout(timeout); pending.delete(id); reject(error); }
@@ -203,8 +204,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   registerTool({ name: "mate_propose", label: "Propose delegated task",
-    description: "Record a task and resolve its explicit local Git base ref to a commit. Does not acquire a worktree. Ask the human to run /mate-approve ID. Reuse IDs for retries.",
-    parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.String(), brief: Type.String({ maxLength: 20000 }) }),
+    description: "Record a task and resolve its local Git base to a commit. Omit base to use the project's required base_branch in mate.config.json; a conflicting base is refused. Without configured base_branch, an explicit base is required. No fetch or worktree acquisition. Ask the human to run /mate-approve ID. Reuse IDs for retries.",
+    parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.Optional(Type.String()), brief: Type.String({ maxLength: 20000 }) }),
     async execute(_id, params) { return result(await rpc("propose", params)); } });
   registerTool({ name: "mate_dispatch", label: "Dispatch approved task",
     description: "Start a human-approved task using Treehouse and pi in Herdr. Optional model/effort overrides; omitted values use mate.config.json worker defaults, then the supervisor's current settings. At most two workers. Retrying the same ID never acquires twice or changes its profile.",
@@ -235,7 +236,7 @@ export default function (pi: ExtensionAPI) {
         const { tasks } = await rpc("status", { id: args.trim() });
         const task = tasks[0];
         if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base approval");
-        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository and its Treehouse setup? Allow a local worker to edit this isolated worktree? No push/merge/deploy approval is included.`);
+        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? No push/merge/deploy approval is included.`);
         if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
         await rpc("approve", { id: task.id, sha: task.sha });
         pi.sendMessage({ customType: "mate-approved", display: true,

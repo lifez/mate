@@ -23,6 +23,10 @@ class MateTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="mate-test-")
         self.root = Path(self.tmp.name).resolve()
         self.home = self.root / "home"
+        self.config = self.root / "mate.config.json"
+        self.config.write_text('{}')
+        self.config_patch = patch.object(m, "CONFIG", self.config)
+        self.config_patch.start()
         self.env = patch.dict(os.environ, {"MATE_HOME": str(self.home), "HERDR_ENV": "1", "HERDR_SESSION": "mate-test",
                                           "HERDR_SOCKET_PATH": str(self.root / "herdr.sock"), "HERDR_PANE_ID": "w1:p1", "HERDR_WORKSPACE_ID": "w1"})
         self.env.start()
@@ -42,6 +46,7 @@ class MateTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
         m.HOME = self.old_home
+        self.config_patch.stop()
         self.env.stop()
         self.tmp.cleanup()
 
@@ -74,6 +79,176 @@ class MateTests(unittest.TestCase):
         params = dict(id="fix", provider="openai-codex", model="test-model")
         params.update(overrides)
         return m.dispatch(self.db, params)
+
+    def configure_project(self, **settings):
+        self.config.write_text(json.dumps(dict(projects={"fixture": dict(repo=str(self.repo), **settings)})))
+
+    def test_project_branch_policy_pin_and_config_changes(self):
+        self.configure_project(base_branch="main")
+        params = dict(id="fix", repo=str(self.repo), brief="Fixture")
+        with self.assertRaisesRegex(ValueError, "requires base_branch"):
+            m.propose(self.db, dict(params, base="other"))
+        task = m.propose(self.db, params)
+        self.assertEqual((task['base'], task['base_ref']), ('main', 'refs/heads/main'))
+        m.approve(self.db, dict(id="fix", sha=self.sha))
+        m.git(self.repo, "-c", "user.name=Test", "-c", "user.email=test@test.invalid", "commit", "--allow-empty", "-m", "moved")
+        self.assertEqual(m.propose(self.db, params)['sha'], self.sha)
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", self.fake_herdr):
+            self.configure_project(base_branch="other")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                self.dispatch()
+            self.config.write_text('{}')
+            with self.assertRaisesRegex(ValueError, "changed"):
+                self.dispatch()
+            self.assertEqual(self.acquires, 0)
+            self.configure_project(base_branch="main")
+            task = self.dispatch()
+            self.assertEqual(m.git(task['worktree'], 'rev-parse', 'HEAD'), self.sha)
+
+    def test_project_config_validation_and_branch_kinds(self):
+        for projects in ([], {'x': None}, {'x': {'repo': 'relative'}},
+                         {'x': {'repo': str(self.repo), 'unknown': True}},
+                         {'a': {'repo': str(self.repo)}, 'b': {'repo': str(self.repo / '..' / 'repo')}}):
+            self.config.write_text(json.dumps(dict(projects=projects)))
+            with self.assertRaises(ValueError):
+                self.propose()
+        for startup in (None, {}, {'command': 'echo hi'}, {'command': []},
+                        {'command': ['echo', None]}, {'command': ['echo'], 'typo': 1},
+                        {'command': ['echo'], 'timeout_seconds': True},
+                        {'command': ['echo'], 'timeout_seconds': 121}):
+            self.configure_project(startup=startup)
+            with self.assertRaises(ValueError):
+                self.propose()
+        m.git(self.repo, 'tag', 'tag-only')
+        for base in ('tag-only', self.sha, 'missing', 'main~1'):
+            self.configure_project(base_branch=base)
+            with self.assertRaises((ValueError, RuntimeError)):
+                self.propose()
+        m.git(self.repo, 'update-ref', 'refs/remotes/origin/migration', self.sha)
+        self.configure_project(base_branch='origin/migration')
+        params = dict(id='remote', repo=str(self.repo), brief='Fixture')
+        self.assertEqual(m.propose(self.db, params)['base_ref'], 'refs/remotes/origin/migration')
+        m.git(self.repo, 'branch', 'origin/migration')
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            m.propose(self.db, dict(params, id='ambiguous'))
+        alias = self.root / 'alias'
+        alias.symlink_to(self.repo, target_is_directory=True)
+        self.config.write_text(json.dumps(dict(projects={'alias': dict(repo=str(alias), base_branch='main')})))
+        self.assertEqual(m.project_config(str(self.repo))['base_branch'], 'main')
+        with patch.dict(os.environ, {'HOME': str(self.root)}):
+            self.config.write_text(json.dumps(dict(projects={'home': dict(repo='~/repo')})))
+            self.assertEqual(m.project_config(str(self.repo))['repo'], str(self.repo))
+        self.config.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'base'):
+            m.propose(self.db, dict(params, id='no-base'))
+        self.assertEqual(self.acquires, 0)
+
+    def test_startup_copies_before_launch_and_never_repeats(self):
+        source = self.root / 'fixture.env'
+        source.write_text('FIXTURE=not-a-secret\n')
+        script = self.root / 'setup.py'
+        script.write_text('''import os, pathlib, shutil
+assert pathlib.Path.cwd() == pathlib.Path(os.environ['MATE_WORKTREE'])
+assert os.environ['MATE_TASK_ID'] == 'fix'
+assert pathlib.Path(os.environ['MATE_REPO']).name == 'repo'
+shutil.copyfile(pathlib.Path(os.environ['MATE_REPO']).parent / 'fixture.env', '.env')
+pathlib.Path('count').write_text('once')
+print('fixture-private-output')
+''')
+        self.configure_project(base_branch='main', startup=dict(command=[sys.executable, str(script)]))
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        def endpoint(task, *args):
+            if args[:2] == ('tab', 'create'):
+                self.assertEqual((Path(task['worktree']) / '.env').read_text(), source.read_text())
+                self.assertEqual(m.load(self.db, 'fix')['startup_state'], 'succeeded')
+            return self.fake_herdr(task, *args)
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', endpoint):
+            task = self.dispatch()
+            self.assertFalse((self.repo / '.env').exists())
+            self.assertEqual((self.home / 'fix/startup.log').stat().st_mode & 0o777, 0o600)
+            self.assertNotIn('fixture-private-output', json.dumps(m.snapshot(self.db, dict(id='fix'))))
+            script.write_text('raise RuntimeError("must not run again")')
+            self.dispatch()
+            task['state'] = 'review'
+            with self.db: m.save(self.db, task)
+            self.configure_project(base_branch='changed', startup=dict(command=['false']))
+            m.resume(self.db, dict(id='fix', message='Same scope'))
+            self.assertEqual(self.acquires, 1)
+            self.assertEqual((Path(task['worktree']) / 'count').read_text(), 'once')
+
+    def test_startup_failure_timeout_and_head_change_block_launch(self):
+        for index, command in enumerate((
+            [sys.executable, '-c', 'print("private-output"); raise SystemExit(1)'],
+            [sys.executable, '-c', 'import time; time.sleep(30)'],
+            ['git', 'switch', '-c', 'unexpected'],
+            ['/bin/sh', '-c', 'sleep 30 &'],
+        )):
+            ident = f'failure-{index}'
+            self.configure_project(startup=dict(command=command, timeout_seconds=1))
+            self.propose(ident)
+            m.approve(self.db, dict(id=ident, sha=self.sha))
+            with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+                with self.assertRaises((RuntimeError, ValueError)) as error:
+                    self.dispatch(id=ident)
+                self.assertNotIn('private-output', str(error.exception))
+                task = m.load(self.db, ident)
+                self.assertEqual(task['state'], 'attention')
+                self.assertEqual(self.launches, 0)
+                self.assertEqual(self.dispatch(id=ident)['state'], 'attention')
+                with self.assertRaises(ValueError):
+                    m.resume(self.db, dict(id=ident, message='Retry'))
+            self.assertTrue(m.snapshot(self.db, {})['events'])
+            # Remove only the fixture task so the next subcase can acquire (attention blocks fleet).
+            with self.db: self.db.execute('DELETE FROM tasks WHERE id=?', (ident,))
+
+    def test_invalid_dispatch_config_stops_before_acquire(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        for content in ('{', '[]', '{"projects": null}', '{"projects": {"x": {"repo": "relative"}}}'):
+            self.config.write_text(content)
+            with patch.object(m, 'herdr', side_effect=AssertionError('No endpoint calls')):
+                with self.assertRaises(ValueError): self.dispatch()
+            self.assertEqual(m.load(self.db, 'fix')['state'], 'approved')
+        self.config.unlink()
+        with self.assertRaises(FileNotFoundError): self.dispatch()
+        self.assertEqual(self.acquires, 0)
+
+    def test_copy_env_example_permissions_ignore_and_symlink_refusal(self):
+        source = self.root / 'source.env'
+        source.write_text('FIXTURE=yes')
+        command = [sys.executable, str(ROOT / 'examples/copy-env.py'), str(source)]
+        def copy():
+            return subprocess.run(command, cwd=self.repo, capture_output=True).returncode
+        self.assertNotEqual(copy(), 0)  # Not ignored.
+        (self.repo / '.gitignore').write_text('.env.local\n')
+        destination = self.repo / '.env.local'
+        destination.symlink_to(source)
+        self.assertNotEqual(copy(), 0)
+        self.assertEqual(source.read_text(), 'FIXTURE=yes')
+        destination.unlink()
+        self.assertEqual(copy(), 0)
+        self.assertEqual(destination.read_text(), source.read_text())
+        self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+        self.assertNotEqual(copy(), 0)  # No silent overwrite.
+        destination.unlink(); source.unlink()
+        self.assertNotEqual(copy(), 0)
+        self.assertFalse(destination.exists())
+
+    def test_startup_crash_recovers_to_attention_without_retry(self):
+        self.configure_project(startup=dict(command=['true']))
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        def crash(db, task):
+            task.update(startup_state='running')
+            with db: m.save(db, task)
+            raise SystemExit
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr), patch.object(m, 'startup_worktree', crash):
+            with self.assertRaises(SystemExit): self.dispatch()
+        self.db.close(); self.db = m.connect()
+        with patch.object(m.time, 'time', return_value=time.time() + 61): m.reconcile(self.db)
+        self.assertEqual(self.dispatch()['state'], 'attention')
+        self.assertEqual((self.acquires, self.launches), (1, 0))
 
     def test_profile_overrides_persist_and_continue_without_reacquire(self):
         self.propose()

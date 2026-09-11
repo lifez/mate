@@ -106,9 +106,11 @@ try {
   assert.throws(() => dispatchProfile(ctx, { model: 'other/vendor/model' }, configPath), /unsupported/, 'configured effort must not silently downgrade');
   configure({ worker: { effort: 'low' } });
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), { provider: 'openai-codex', model: 'main-model', effort: 'low' }, 'config reread without reload');
+  configure({ projects: { fixture: { repo: '/fixture', base_branch: 'main', startup: { command: ['true'] } } } });
+  assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}), 'projects do not alter worker defaults');
   configure({});
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}));
-  for (const invalid of [null, [], { workers: {} }, { worker: null }, { worker: [] },
+  for (const invalid of [null, [], { workers: {} }, { worker: null }, { worker: [] }, { projects: null }, { projects: [] },
     { worker: { model: 1 } }, { worker: { model: ' ' } }, { worker: { effort: 'ultra' } }, { worker: { typo: true } }]) {
     configure(invalid);
     assert.throws(() => dispatchProfile(ctx, {}, configPath), /Invalid/);
