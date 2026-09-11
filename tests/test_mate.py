@@ -54,12 +54,14 @@ class MateTests(unittest.TestCase):
         return m.propose(self.db, dict(id=ident, repo=str(self.repo), base="main", brief="Investigate locally; report evidence. Do not push."))
 
     def fake_run(self, args, cwd=None, timeout=30):
+        if args[:2] == ["ps", "-axo"]:
+            return '100 1 100 ttys100 zsh -zsh'
         if args[:2] == ["treehouse", "get"]:
             self.acquires += 1
             wt = self.root / f"worktree-{self.acquires}"
             m.git(self.repo, "worktree", "add", "-b", f"pool-{self.acquires}", str(wt), "HEAD")
             lease = dict(path=str(wt), lease_id=f"lease-{self.acquires}", lease_holder=args[-1])
-            self.leases.append(dict(lease, status="leased"))
+            self.leases.append(dict(lease, status="leased", processes=[dict(pid=100, name='zsh')]))
             return json.dumps(lease)
         if args[:2] == ["treehouse", "status"]:
             return json.dumps(self.leases)
@@ -67,9 +69,12 @@ class MateTests(unittest.TestCase):
 
     def fake_herdr(self, task, *args):
         if args[:2] == ("pane", "get"):
-            return {"pane": {"pane_id": args[2], "workspace_id": "w1", "tab_id": task.get("tab", "w1:t1")}}
+            return {"pane": {"pane_id": args[2], "workspace_id": "w1", "tab_id": task.get("tab", "w1:t1"), "terminal_id": "original-terminal"}}
+        if args[:2] == ("pane", "process-info"):
+            return dict(process_info=dict(pane_id=task['pane'], shell_pid=100,
+                foreground_process_group_id=100, foreground_processes=[dict(pid=100)]))
         if args[:2] == ("tab", "create"):
-            return {"tab": {"tab_id": "w1:t2"}, "root_pane": {"pane_id": "w1:p2"}}
+            return {"tab": {"tab_id": "w1:t2"}, "root_pane": {"pane_id": "w1:p2", "terminal_id": "original-terminal"}}
         if args[:2] == ("pane", "run"):
             self.launches += 1
             return {}
@@ -82,6 +87,20 @@ class MateTests(unittest.TestCase):
 
     def configure_project(self, **settings):
         self.config.write_text(json.dumps(dict(projects={"fixture": dict(repo=str(self.repo), **settings)})))
+
+    def test_snapshot_open_tasks_excludes_complete_before_pagination(self):
+        states = ['complete'] * 51 + ['awaiting-base', 'approved', 'running', 'review', 'failed', 'attention']
+        records = [dict(id=str(i), state=state, updated=-i, attempt=0) for i, state in enumerate(states)]
+        with patch.object(m, 'tasks', return_value=records):
+            for offset in (0, 50, 100):
+                snapshot = m.snapshot(self.db, dict(task_offset=offset))
+                self.assertEqual(snapshot['total_tasks'], 57)
+                self.assertEqual(snapshot['open_tasks'], 6)
+            self.assertTrue(all(t['state'] == 'complete' for t in m.snapshot(self.db, {})['tasks']))
+        with patch.object(m, 'tasks', return_value=records[:51]):
+            self.assertEqual(m.snapshot(self.db, {})['open_tasks'], 0)
+        with patch.object(m, 'tasks', return_value=[]):
+            self.assertEqual(m.snapshot(self.db, {})['open_tasks'], 0)
 
     def test_project_branch_policy_pin_and_config_changes(self):
         self.configure_project(base_branch="main")
@@ -173,7 +192,9 @@ print('fixture-private-output')
             task['state'] = 'review'
             with self.db: m.save(self.db, task)
             self.configure_project(base_branch='changed', startup=dict(command=['false']))
-            m.resume(self.db, dict(id='fix', message='Same scope'))
+            pending = m.propose_scope(self.db, dict(id='fix', brief='Also check accessibility.'))['pending_scope']
+            m.review_scope(self.db, dict(id='fix', token=pending['token'], attempt=1, sha=self.sha, approve=True))
+            m.resume(self.db, dict(id='fix', message='Run the approved scope'))
             self.assertEqual(self.acquires, 1)
             self.assertEqual((Path(task['worktree']) / 'count').read_text(), 'once')
 
@@ -275,6 +296,104 @@ print('fixture-private-output')
             self.assertEqual((changed["worktree"], changed["sha"]), (task["worktree"], self.sha))
             self.assertEqual(self.acquires, 1)
 
+    def test_scope_addition_approval_continuation_and_preserved_evidence(self):
+        original = self.propose()
+        approved = m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch(effort='high')
+            task['state'] = 'review'
+            with self.db:
+                m.save(self.db, task)
+                m.event(self.db, task, 'report', 'Original report')
+            folder = self.home / 'fix'
+            (folder / 'report-1.txt').write_text('Original evidence')
+            (folder / 'session.jsonl').write_text('Saved session')
+            dirty = Path(task['worktree']) / 'keep.txt'
+            dirty.write_text('Uncommitted work')
+            pending = m.propose_scope(self.db, dict(id='fix', brief='Also check accessibility.'))
+            self.assertEqual(m.propose_scope(self.db, dict(id='fix', brief='Also check accessibility.')), pending)
+            self.assertEqual(pending['brief'], original['brief'])
+            self.assertTrue(m.snapshot(self.db, {})['tasks'][0]['scope_pending'])
+            self.assertNotIn('pending_scope', m.snapshot(self.db, {})['tasks'][0])
+            with self.assertRaisesRegex(ValueError, 'Pending'):
+                m.resume(self.db, dict(id='fix', message='Must wait'))
+            with self.assertRaisesRegex(ValueError, 'Scope changed'):
+                m.complete(self.db, dict(id='fix', attempt=1))
+            self.db.close(); self.db = m.connect()
+            params = dict(id='fix', token=pending['pending_scope']['token'], attempt=1, sha=self.sha, approve=True)
+            extended = m.review_scope(self.db, params)
+            self.assertEqual(extended['original_brief'], original['brief'])
+            self.assertIn('Also check accessibility.', extended['brief'])
+            self.assertTrue(extended['scope_history'][0]['approved_by'])
+            for key in ('repo', 'base', 'sha', 'branch', 'lease', 'holder', 'worktree', 'pane', 'tab', 'session', 'socket', 'model', 'effort'):
+                self.assertEqual(extended[key], task[key])
+            self.assertEqual(extended['approved_at'], approved['approved_at'])
+            with self.assertRaises(ValueError): m.review_scope(self.db, params)
+            with self.assertRaisesRegex(ValueError, 'Scope changed'):
+                m.complete(self.db, dict(id='fix', attempt=1, scope_revision=1))
+            self.assertEqual(self.dispatch()['state'], 'review')  # Not a fresh dispatch approval.
+            self.assertEqual((self.acquires, self.launches), (1, 1))
+            with patch.object(m, 'check_endpoint', side_effect=ValueError('endpoint changed')):
+                with self.assertRaisesRegex(ValueError, 'endpoint changed'):
+                    m.resume(self.db, dict(id='fix', message='Run approved addition'))
+            self.leases[0]['lease_holder'] = 'foreign'
+            with self.assertRaisesRegex(ValueError, 'exact lease'):
+                m.resume(self.db, dict(id='fix', message='Run approved addition'))
+            self.leases[0]['lease_holder'] = task['holder']
+            continued = m.resume(self.db, dict(id='fix', message='Run approved addition'))
+            self.assertEqual((self.acquires, self.launches, continued['attempt']), (1, 2, 2))
+            self.assertEqual(dirty.read_text(), 'Uncommitted work')
+            self.assertEqual((folder / 'session.jsonl').read_text(), 'Saved session')
+            self.assertEqual(m.snapshot(self.db, dict(id='fix', attempt=1))['report']['text'], 'Original evidence')
+            self.assertEqual(len(m.snapshot(self.db, {})['events']), 2)
+            continued['state'] = 'review'
+            with self.db: m.save(self.db, continued)
+            with self.assertRaisesRegex(ValueError, 'Scope changed'):
+                m.complete(self.db, dict(id='fix', attempt=2, scope_revision=0))
+            self.assertEqual(m.complete(self.db, dict(id='fix', attempt=2, scope_revision=1))['state'], 'complete')
+
+    def test_scope_addition_rejects_live_stale_invalid_and_terminal_tasks(self):
+        task = self.propose()
+        (self.home / 'fix').mkdir()
+        for state in ('awaiting-base', 'approved', 'acquiring', 'launching', 'running', 'attention', 'complete'):
+            task.update(state=state, attempt=1)
+            with self.db: m.save(self.db, task)
+            with self.assertRaises(ValueError): m.propose_scope(self.db, dict(id='fix', brief='Extra'))
+        task['state'] = 'failed'
+        with self.db: m.save(self.db, task)
+        with m.lock(self.home / 'fix/run.lock'):
+            with self.assertRaises(BlockingIOError): m.propose_scope(self.db, dict(id='fix', brief='Extra'))
+        for brief in ('', ' ', '\0', 1, 'x' * 20000):
+            with self.assertRaises(ValueError): m.propose_scope(self.db, dict(id='fix', brief=brief))
+        pending = m.propose_scope(self.db, dict(id='fix', brief='Extra'))['pending_scope']
+        params = dict(id='fix', token=pending['token'], attempt=1, sha=self.sha, approve=True)
+        for change in (dict(token='stale'), dict(attempt=2), dict(attempt=True), dict(sha='changed'), dict(approve='yes')):
+            with self.assertRaises(ValueError): m.review_scope(self.db, dict(params, **change))
+        with m.lock(self.home / 'fix/run.lock'):
+            with self.assertRaises(BlockingIOError): m.review_scope(self.db, params)
+        replaced = m.propose_scope(self.db, dict(id='fix', brief='Revised extra'))
+        with self.assertRaises(ValueError): m.review_scope(self.db, params)
+        params['token'] = replaced['pending_scope']['token']
+        # A changed attempt/state must invalidate an open approval dialog.
+        for change in (dict(attempt=2), dict(state='complete'), dict(state='attention')):
+            with self.db: m.save(self.db, dict(replaced, **change))
+            with self.assertRaises(ValueError): m.review_scope(self.db, params)
+        with self.db: m.save(self.db, replaced)
+        declined = m.review_scope(self.db, dict(params, approve=False))
+        self.assertNotIn('pending_scope', declined)
+        self.assertNotIn('scope_history', declined)
+        self.assertEqual((declined['state'], declined['brief']), ('failed', task['brief']))
+        self.assertEqual(m.snapshot(self.db, {})['events'], [])
+        for brief in ('First approved addition', 'Second approved addition'):
+            pending = m.propose_scope(self.db, dict(id='fix', brief=brief))['pending_scope']
+            m.review_scope(self.db, dict(params, token=pending['token']))
+        self.db.close(); self.db = m.connect()
+        accepted = m.load(self.db, 'fix')
+        self.assertEqual(accepted['state'], 'failed')
+        self.assertEqual(len(accepted['scope_history']), 2)
+        self.assertEqual(len(m.snapshot(self.db, {})['events']), 2, 'each approval has a durable event even in the same attempt')
+        self.assertTrue(all(h['first_attempt'] == 2 for h in accepted['scope_history']))
+
     def test_approval_pin_isolation_idempotency_and_lease_identity(self):
         task = self.propose()
         with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", self.fake_herdr):
@@ -306,6 +425,73 @@ print('fixture-private-output')
         with self.assertRaises(ValueError):
             m.resume(self.db, dict(id="fix", message="Retry"))
         self.assertEqual(len(m.snapshot(self.db, {})["events"]), 1)
+
+    def test_acquire_recovery_preserves_approval_history_and_retries_once(self):
+        self.configure_project(base_branch='main', startup=dict(command=['true']))
+        self.propose()
+        approved = m.approve(self.db, dict(id='fix', sha=self.sha))
+        def fail_acquire(args, cwd=None, timeout=30):
+            if args[:2] == ['treehouse', 'get']: raise RuntimeError('lost acquire receipt')
+            return self.real_run(args, cwd, timeout)
+        with patch.object(m, 'run', fail_acquire), patch.object(m, 'herdr', self.fake_herdr):
+            with self.assertRaises(RuntimeError): self.dispatch(effort='high')
+        failed = m.load(self.db, 'fix')
+        m.git(self.repo, '-c', 'user.name=Test', '-c', 'user.email=test@test.invalid', 'commit', '--allow-empty', '-m', 'moved')
+        self.configure_project(base_branch='main', startup=dict(command=['false']))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            confirmation = f"recover fix {failed['attempt']} {failed['sha']}"
+            with patch.object(m.sys.stdin, 'isatty', return_value=True), patch('builtins.print'), patch('builtins.input', return_value=confirmation):
+                m.recover_acquire_cli('fix')
+            recovered = m.load(self.db, 'fix')
+            self.assertEqual(recovered['recoveries'][0]['task'], failed)
+            self.assertEqual((self.acquires, self.launches), (0, 0))
+            for key in ('id', 'repo', 'brief', 'sha', 'base', 'branch', 'approved_at'):
+                self.assertEqual(recovered[key], approved[key])
+            self.db.close(); self.db = m.connect()
+            with self.assertRaises(ValueError): m.recover_acquire(self.db, m.load(self.db, 'fix'))
+            task = self.dispatch(model='ignored', effort='low')
+            self.assertEqual(task['attempt'], 2)
+            self.assertEqual(task['effort'], 'high')
+            self.assertEqual(task['startup_state'], 'succeeded')
+            self.assertNotEqual(task['holder'], failed['holder'])
+            self.assertEqual(m.git(task['worktree'], 'rev-parse', 'HEAD'), self.sha)
+            self.dispatch()
+            self.assertEqual((self.acquires, self.launches), (1, 1))
+        self.assertEqual([e['kind'] for e in m.snapshot(self.db, {})['events']], ['launch-uncertain', 'acquire-recovered'])
+
+    def test_acquire_recovery_refuses_uncertainty_and_cli_requires_human(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', side_effect=RuntimeError('acquire failed')), patch.object(m, 'herdr', self.fake_herdr):
+            with self.assertRaises(RuntimeError): self.dispatch()
+        task = m.load(self.db, 'fix')
+        with patch.object(m, 'run', self.fake_run):
+            for key in ('lease', 'worktree', 'startup_state', 'endpoint_receipt', 'pane', 'tab', 'usage', 'followup'):
+                with self.assertRaises(ValueError): m.recover_acquire(self.db, dict(task, **{key: None}))
+            artifact = self.home / 'fix/session.jsonl'
+            artifact.write_text('evidence')
+            with self.assertRaisesRegex(ValueError, 'artifacts'): m.recover_acquire(self.db, task.copy())
+            artifact.unlink()
+            self.leases = [dict(path=str(self.root / 'wt'), status='leased', lease_id='fixture', lease_holder=task['holder'])]
+            with self.assertRaisesRegex(ValueError, 'holder'): m.recover_acquire(self.db, task.copy())
+            for rows in ({}, [None], [{}], [dict(path=str(self.root / 'wt'), status='leased')]):
+                self.leases = rows
+                with self.assertRaisesRegex(ValueError, 'status'): m.recover_acquire(self.db, task.copy())
+            self.leases = []
+            self.configure_project(base_branch='main')
+            with self.assertRaisesRegex(ValueError, 'base_branch'): m.recover_acquire(self.db, task.copy())
+            self.config.write_text('{}')
+            m.git(self.repo, 'branch', task['branch'])
+            with self.assertRaisesRegex(ValueError, 'branch already exists'): m.recover_acquire(self.db, task.copy())
+        with patch.object(m.sys.stdin, 'isatty', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'interactive'): m.recover_acquire_cli('fix')
+        with patch.object(m.sys.stdin, 'isatty', return_value=True), patch('builtins.print'), patch('builtins.input', return_value='no'):
+            with m.lock(self.home / 'supervisor.lock'):
+                with self.assertRaises(BlockingIOError): m.recover_acquire_cli('fix')
+            with m.lock(self.home / 'fix/run.lock'):
+                with self.assertRaises(BlockingIOError): m.recover_acquire_cli('fix')
+            m.recover_acquire_cli('fix')
+        self.assertEqual(m.load(self.db, 'fix'), task)
 
     def test_durable_events_ack_is_atomic_and_not_completion(self):
         task = self.propose()
@@ -455,6 +641,156 @@ print('fixture-private-output')
         self.assertEqual(snapshot['tasks'][0]['completed_at'], completed['completed_at'])
         self.assertEqual(len(snapshot['events']), 1, 'completion must not swallow pending reports')
 
+    def test_pane_process_ownership_not_shared_tty_or_program_name(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            baseline = '100 1 100 ttys100 zsh -zsh'
+            # Detached prompt services share a TTY but are not shell jobs.
+            helpers = baseline + '\n110 1 110 ttys100 zsh -zsh\n111 110 110 ttys100 gitstatusd gitstatusd\n112 110 110 ttys100 <defunct> <defunct>'
+            with patch.object(m, 'run', return_value=helpers):
+                self.assertEqual(m.ready_pane(task)[0], 100)
+            for row in ('120 100 120 ttys100 node vite',  # Background/stopped job.
+                        '120 100 120 ttys100 zsh -zsh',  # No name-based exemption.
+                        '120 100 120 ttys100 gitstatusd gitstatusd',
+                        '120 1 100 ttys100 node orphan'):  # Still in shell's group.
+                with patch.object(m, 'run', return_value=helpers + '\n' + row):
+                    with self.assertRaisesRegex(ValueError, 'background/stopped'):
+                        m.ready_pane(task)
+
+    def test_pane_launch_guard_and_missing_continuation_recovery(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch(effort='high')
+            task.update(state='review', usage={'1': m.empty_usage()}, original_brief=task['brief'],
+                        scope_history=[dict(brief='Approved addition', approved_by='human', first_attempt=2)])
+            with self.db: m.save(self.db, task)
+            folder = self.home / 'fix'
+            session = folder / 'session.jsonl'
+            session.write_text(json.dumps(dict(type='session', version=3,
+                id='01a08e47-9d5b-7355-a8e7-bc6b9f472ef5', cwd=task['worktree'])) + '\n')
+            (folder / 'report-1.txt').write_text('Retained evidence')
+            dirty = Path(task['worktree']) / 'keep.txt'
+            dirty.write_text('Uncommitted edits')
+            # Vite in the foreground: no command, no attempt increment or journal change.
+            def busy(t, *args):
+                result = self.fake_herdr(t, *args)
+                if args[:2] == ('pane', 'process-info'):
+                    result['process_info']['foreground_processes'] = [dict(pid=101)]
+                return result
+            with patch.object(m, 'herdr', busy):
+                with self.assertRaisesRegex(ValueError, 'idle shell'):
+                    m.resume(self.db, dict(id='fix', message='Continue'))
+                with self.assertRaisesRegex(ValueError, 'idle shell'): m.launch_worker(task)
+            self.assertEqual(m.load(self.db, 'fix'), task)
+            self.assertEqual(self.launches, 1)
+            # Reproduce a pre-upgrade command swallowed by Vite, then reconciled.
+            task.update(state='launching', attempt=2, followup='Continue approved scope')
+            with self.db: m.save(self.db, task)
+            with patch.object(m.time, 'time', return_value=time.time() + 61): m.reconcile(self.db)
+            failed = m.load(self.db, 'fix')
+            del failed['missing_from']  # Legacy attempt 7 has no phase marker.
+            with self.db: m.save(self.db, failed)
+            events = m.snapshot(self.db, {})['events']
+            with m.lock(folder / 'run.lock'):
+                with self.assertRaises(BlockingIOError): m.resume(self.db, dict(id='fix', message='Continue'))
+            with patch.object(m, 'herdr', busy):
+                with self.assertRaises(ValueError): m.resume(self.db, dict(id='fix', message='Continue'))
+            self.assertEqual(m.load(self.db, 'fix'), failed)
+            commands = []
+            def capture(t, *args):
+                if args[:2] == ('pane', 'run'): commands.append(args[3])
+                return self.fake_herdr(t, *args)
+            def shared_tty_helpers(args, cwd=None, timeout=30):
+                output = self.fake_run(args, cwd, timeout)
+                if args[0] == 'ps':
+                    output += '\n110 1 110 ttys100 zsh -zsh\n111 110 110 ttys100 gitstatusd gitstatusd'
+                return output
+            with patch.object(m, 'herdr', capture), patch.object(m, 'run', shared_tty_helpers):
+                continued = m.resume(self.db, dict(id='fix', message='Continue approved scope'))
+            self.assertEqual((continued['state'], continued['attempt']), ('launching', 3))
+            self.assertEqual(continued['launch_recoveries'][0]['task'], failed)
+            self.assertEqual(continued['launch_recoveries'][0]['outcome'], 'launch-failed')
+            for key in ('approved_at', 'brief', 'original_brief', 'scope_history', 'repo', 'sha', 'branch', 'worktree', 'lease', 'holder', 'endpoint_receipt', 'model', 'effort', 'usage'):
+                self.assertEqual(continued[key], failed[key])
+            self.assertTrue(commands[0].startswith('cd -- '))
+            self.assertIn(task['worktree'], commands[0])
+            self.assertEqual(dirty.read_text(), 'Uncommitted edits')
+            self.assertEqual((folder / 'report-1.txt').read_text(), 'Retained evidence')
+            self.assertEqual(json.loads(session.read_text())['id'], '01a08e47-9d5b-7355-a8e7-bc6b9f472ef5')
+            self.assertFalse((folder / 'report-2.txt').exists())
+            self.assertEqual((self.acquires, self.launches), (1, 2))
+            self.assertEqual(m.snapshot(self.db, {})['events'][0], events[0])
+            self.assertEqual(m.snapshot(self.db, {})['events'][-1]['kind'], 'launch-recovered')
+            with self.assertRaises(ValueError): m.resume(self.db, dict(id='fix', message='Duplicate'))
+            self.db.close(); self.db = m.connect()
+            self.assertEqual(m.load(self.db, 'fix'), continued)
+
+    def test_missing_launch_recovery_refuses_evidence_identity_and_process_uncertainty(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            folder = self.home / 'fix'
+            session = folder / 'session.jsonl'
+            session.write_text(json.dumps(dict(type='session', version=3,
+                id='01a08e47-9d5b-7355-a8e7-bc6b9f472ef5', cwd=task['worktree'])) + '\n')
+            (folder / 'report-1.txt').write_text('Old report')
+            task.update(state='launching', attempt=2, followup='Continue', usage={'1': m.empty_usage()})
+            with self.db: m.save(self.db, task)
+            with patch.object(m.time, 'time', return_value=time.time() + 61): m.reconcile(self.db)
+            task = m.load(self.db, 'fix')
+            def refused():
+                before = m.load(self.db, 'fix')
+                with self.assertRaises((ValueError, RuntimeError, FileNotFoundError)):
+                    m.resume(self.db, dict(id='fix', message='Continue'))
+                self.assertEqual(m.load(self.db, 'fix'), before)
+                self.assertEqual(self.launches, 1)
+            for change in (dict(missing_from='running'), dict(startup_state='failed'),
+                           dict(usage={'1': {}, '2': {}}), dict(pending_scope={'brief': 'pending'}),
+                           dict(approved_at=None), dict(branch='foreign'), dict(sha='f' * 40),
+                           dict(endpoint_receipt={}), dict(error='Pi forcibly terminated')):
+                with self.db: m.save(self.db, dict(task, **change))
+                refused()
+            with self.db: m.save(self.db, task)
+            for name in ('events-2.jsonl', 'stderr-2.log', 'report-2.txt'):
+                artifact = folder / name
+                artifact.write_text('')
+                refused()
+                artifact.unlink()
+            original_session = session.read_bytes()
+            session.unlink(); refused()
+            session.write_text('{broken'); refused()
+            session.write_bytes(original_session)
+            future = time.time_ns() + 1_000_000_000
+            os.utime(session, ns=(future, future)); refused()
+            os.utime(session, ns=(1, 1))
+            for inventory in (None, [], [dict(pid=999)], [dict(pid=100), dict(pid=101, name='pi')]):
+                self.leases[0]['processes'] = inventory
+                refused()
+            self.leases[0]['processes'] = [dict(pid=100)]
+            for suffix in ('\n101 100 101 ttys100 node vite',
+                           f'\n101 1 101 ttys100 pi pi --session {session}',
+                           f'\n101 1 101 ?? pi pi --session {session}',
+                           '\n101 1 101 ?? pi pi --session 01a08e47-9d5b-7355-a8e7-bc6b9f472ef5'):
+                def processes(args, cwd=None, timeout=30):
+                    result = self.fake_run(args, cwd, timeout)
+                    return result + suffix if args[0] == 'ps' else result
+                with patch.object(m, 'run', processes): refused()
+            with patch.object(m, 'run', side_effect=RuntimeError('Process inventory unavailable')): refused()
+            self.leases[0]['lease_holder'] = 'foreign'; refused()
+            self.leases[0]['lease_holder'] = task['holder']
+            other = self.propose('other')
+            for state in ('attention', 'running'):
+                other['state'] = state
+                with self.db: m.save(self.db, other)
+                if state == 'running':
+                    third = self.propose('third'); third['state'] = 'running'
+                    with self.db: m.save(self.db, third)
+                refused()
+
     def test_crashed_worker_requires_inspection_not_duplicate_resume(self):
         task = self.propose()
         (self.home / "fix").mkdir()
@@ -559,7 +895,9 @@ print('fixture-private-output')
         duplicate = subprocess.run(command, env=env, cwd=task["worktree"], capture_output=True, timeout=10)
         self.assertNotEqual(duplicate.returncode, 0)
         with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", self.fake_herdr):
-            m.resume(self.db, dict(id="fix", message="Recheck the same scope"))
+            pending = m.propose_scope(self.db, dict(id='fix', brief='Also check accessibility.'))['pending_scope']
+            m.review_scope(self.db, dict(id='fix', token=pending['token'], attempt=1, sha=self.sha, approve=True))
+            m.resume(self.db, dict(id="fix", message="Recheck the approved scope"))
         command[-1] = "2"
         env["TEST_PROVIDER_ERROR"] = "1"
         subprocess.run(command, env=env, cwd=task["worktree"], capture_output=True, check=True, timeout=10)
@@ -569,6 +907,10 @@ print('fixture-private-output')
         argv = json.loads((self.home / "argv.json").read_text())
         self.assertEqual(argv[argv.index("--model") + 1], "selected-model")
         self.assertEqual(argv[argv.index("--thinking") + 1], "high")
+        self.assertIn('Current human-approved scope', argv[-1])
+        self.assertIn('Also check accessibility.', argv[-1])
+        self.assertIn('Recheck the approved scope', argv[-1])
+        self.assertEqual(argv[argv.index('--session') + 1], str(self.home / 'fix/session.jsonl'))
         self.assertIn("quota", m.snapshot(self.db, {"id": "fix"})["report"]["text"])
         with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", self.fake_herdr):
             m.resume(self.db, dict(id='fix', message='Check missing bridge completion'))

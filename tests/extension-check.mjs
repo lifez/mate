@@ -26,7 +26,7 @@ process.env.MATE_HOME = join(tmp, 'home');
 const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 git('init', '-b', 'main'); git('-c', 'user.name=Mate Test', '-c', 'user.email=mate@test.invalid', 'commit', '--allow-empty', '-m', 'base');
-const handlers = {}, tools = {}, commands = {}, renderers = {}, messages = [], notices = [];
+const handlers = {}, tools = {}, commands = {}, renderers = {}, messages = [], notices = [], statuses = {};
 let active = ['read', 'write', 'bash', 'external_tool'], approval = false, closeApproval = false, expanded = false;
 const models = [
   { provider: 'openai-codex', id: 'main-model', reasoning: true },
@@ -35,7 +35,7 @@ const models = [
 ];
 const ctx = { mode: 'tui', hasUI: true, model: models[0], thinkingLevel: 'high',
   modelRegistry: { find: (provider, id) => models.find(m => m.provider === provider && m.id === id) },
-  ui: { notify: (...args) => notices.push(args), setStatus() {}, confirm: async title => title === 'Close worker Herdr tab too?' ? closeApproval : approval,
+  ui: { notify: (...args) => notices.push(args), setStatus(key, value) { statuses[key] = value; }, confirm: async title => title === 'Close worker Herdr tab too?' ? closeApproval : approval,
     getToolsExpanded: () => expanded, setToolsExpanded: value => { expanded = value; } } };
 const pi = {
   on(name, fn) { handlers[name] = fn; },
@@ -207,10 +207,13 @@ try {
   assert.ok(ackRow().length, 'persisted off restored');
   await commands.calm.handler('on', ctx);
   await wait(() => call('mate_status'));
-  assert.deepEqual(active.sort(), ['mate_ack', 'mate_continue', 'mate_dispatch', 'mate_propose', 'mate_status']);
+  assert.deepEqual(active.sort(), ['mate_ack', 'mate_continue', 'mate_dispatch', 'mate_extend', 'mate_propose', 'mate_status']);
   assert.equal(handlers.tool_call({ toolName: 'bash' }).block, true);
   assert.equal(handlers.tool_call({ toolName: 'read' }).block, true);
   assert.equal(handlers.tool_call({ toolName: 'external_tool' }).block, true);
+  assert.match(tools.mate_continue.description, /unstarted continuation/);
+  assert.match(tools.mate_continue.description, /No worker lock after 60s/);
+  assert.match(tools.mate_continue.description, /Never force/);
   await call('mate_propose', { id: 'inspect', repo, base: 'main', brief: 'Read-only fixture investigation.' });
   await commands['mate-approve'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'awaiting-base');
@@ -239,15 +242,56 @@ try {
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'approved', 'cannot complete before review');
   execFileSync('python3', ['-c', `import sqlite3,os,json\np=os.environ['MATE_HOME']\nc=sqlite3.connect(os.path.join(p,'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(state='review',attempt=1)\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()\nos.makedirs(os.path.join(p,'inspect'),exist_ok=True)`]);
+  assert.equal(tools.mate_review_scope, undefined, 'scope approval is not a model tool');
+  assert.equal(handlers.tool_call({ toolName: 'mate_review_scope' }).block, true);
+  assert.equal(handlers.tool_call({ toolName: 'mate_extend' }), undefined);
+  const initialScope = (await call('mate_status', { id: 'inspect' })).tasks[0].brief;
+  const scopeParams = { id: 'inspect', brief: 'Also check accessibility.' };
+  await call('mate_extend', scopeParams);
+  await commands['mate-approve'].handler('inspect', { ...ctx, mode: 'rpc' });
+  assert.ok((await call('mate_status', { id: 'inspect' })).tasks[0].pending_scope, 'TUI only');
+  approval = false;
+  await commands['mate-approve'].handler('inspect', ctx);
+  let scoped = (await call('mate_status', { id: 'inspect' })).tasks[0];
+  assert.equal(scoped.pending_scope, undefined, 'decline discards pending addition');
+  assert.equal(scoped.brief, initialScope);
+  await call('mate_extend', scopeParams);
+  // Replace the proposal while its confirmation is open; accepting old text must fail.
+  await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => {
+    await call('mate_extend', { ...scopeParams, brief: 'Revised accessibility checks.' });
+    return true;
+  } } });
+  assert.equal(notices.at(-1)[1], 'error');
+  assert.equal((await call('mate_status', { id: 'inspect' })).tasks[0].brief, initialScope);
+  let dialog;
+  await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
+    dialog = title + '\n' + body; return true;
+  } } });
+  scoped = (await call('mate_status', { id: 'inspect' })).tasks[0];
+  assert.match(dialog, /Approve additional task scope/);
+  assert.ok(dialog.includes(initialScope) && dialog.includes(scoped.sha));
+  assert.match(dialog, /Revised accessibility checks/);
+  assert.equal(scoped.state, 'review', 'approval does not dispatch or launch');
+  assert.equal(scoped.scope_history.length, 1);
+  assert.equal(scoped.original_brief, initialScope);
+  assert.ok((await call('mate_status')).events.some(e => e.kind.startsWith('scope-approved-')));
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.equal(notices.at(-1)[1], 'error', 'cannot accept an unexecuted scope addition');
+  // Simulate a finished continuation in this disposable fixture, without Herdr or a model.
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['attempt']=2\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   await commands['mate-complete'].handler('inspect', { ...ctx, mode: 'rpc' });
   assert.equal((await call('mate_status')).tasks[0].state, 'review', 'TUI only');
   approval = false;
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'review', 'decline preserves review');
+  await wait(() => statuses.mate?.startsWith('1 open tasks ·'));
   approval = true;
   await commands['mate-complete'].handler('inspect', ctx);
+  await wait(() => statuses.mate?.startsWith('0 open tasks ·'));
+  assert.equal((await call('mate_status')).total_tasks, 1, 'completed history retained');
   const completed = (await call('mate_status')).tasks[0];
   assert.equal(completed.state, 'complete');
+  await assert.rejects(() => call('mate_extend', scopeParams), /review\/failed/);
   assert.ok(completed.completed_by);
   const completionMessage = messages.find(m => m.message.customType === 'mate-completed');
   assert.equal(completionMessage.message.display, true);

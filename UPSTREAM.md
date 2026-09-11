@@ -11,6 +11,31 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned unstarted-continuation recovery through `mate_continue`: original
+  pane/shell/process inventory, exact lease/worktree/session and no-execution gates;
+  preserve failed-attempt history/events and start a new attempt without reset,
+  startup rerun or approval changes. Shared launch preflight prevents sending into
+  a busy foreground app and explicitly enters the saved worktree root. No generic
+  crash bypass, cleanup, new upstream import or provenance baseline change.
+  Local follow-up: use parent/process-group ownership, not shared TTY, for shell
+  background-job checks; detached prompt helpers are not worker jobs. Keep separate
+  task/session and worktree orphan checks; no process-name whitelist.
+
+- Mate-owned scope additions for stopped review/failed tasks: `mate_extend` proposes,
+  `/mate-approve` accepts/discards the exact pending token/attempt/base under a worker
+  lock, and `mate_continue` reuses the existing worktree/session. Retain original
+  approval and addition history; durable approval wake, no startup/reset/reacquire,
+  and completion waits for a reviewed run of the added scope. No upstream import
+  or provenance baseline change; complete tasks remain terminal.
+
+- Mate-owned offline `recover-acquire ID`: human exact ID/attempt/SHA confirmation,
+  supervisor/worker locks and fail-closed pre-receipt-only recovery. Preserve original
+  approval, profile/startup and full failed-task history; retry uses a new attempt and
+  holder without deleting evidence. No model RPC, cleanup or upstream import.
+
+- Mate-owned footer correction: count non-complete tasks across the full snapshot,
+  retaining total/history and pending events. No upstream import or baseline change.
+
 - Local config packaging: track `mate.config.example.json` instead of personal
   `mate.config.json`; keep local config ignored, document setup/schema in
   `CONFIGURATION.md`, and isolate smoke-test config. No runtime fallback or upstream

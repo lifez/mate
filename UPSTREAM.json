@@ -166,6 +166,30 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R03", "R04", "R05", "R06"],
+      "description": "Mate-owned unstarted-continuation recovery through mate_continue after human pane repair: worker lock, original terminal, shell/process inventory, exact lease/worktree/session, no-execution and capacity gates. Retain failed launch history/events and approval/scope/edits; new attempt without reset/startup/acquisition. Shared launch preflight refuses busy panes and enters saved worktree root. Follow-up corrects shared-TTY false positives: check parent/process-group ownership instead, retaining detached task/session and worktree process gates without a program-name whitelist. No generic crash bypass, cleanup, upstream import or provenance baseline change.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R04", "R06"],
+      "description": "Mate-owned additional scope for stopped review/failed tasks: mate_extend proposal, human-only exact token/attempt/base approval or rejection under worker lock, retained original approval and scope history, durable approval event and same-worktree/session continuation. Pending/unexecuted additions and stale scope confirmations block completion. No reset, startup rerun, reacquisition, complete-task reopening or upstream import; provenance snapshots unchanged.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R03", "R04"],
+      "description": "Mate-owned offline human-only recover-acquire CLI for pre-receipt failures. Exact confirmation and ownership locks, fail-closed evidence/holder/base checks, retained original approval/profile/startup and failed record, monotonic retry attempts. No model RPC, cleanup, upstream import or baseline change.",
+      "paths": ["bin/mate.py", "tests/test_mate.py", "README.md"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03"],
+      "description": "Mate-owned footer fix: snapshot open_tasks counts non-complete tasks before pagination; footer uses this count while total/history and pending events remain unchanged. No upstream import or baseline change.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "tests/test_mate.py", "tests/extension-check.mjs", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R06"],
       "description": "Local config packaging: untrack and ignore mate.config.json, ship mate.config.example.json and CONFIGURATION.md, isolate smoke-test config from personal settings. Runtime still requires explicit local config; historical ledger paths and provenance snapshots preserved. No new upstream import.",
       "paths": [".gitignore", "mate.config.example.json", "CONFIGURATION.md", "README.md", "tests/extension-check.mjs", "tests/live-smoke.py"],

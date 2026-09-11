@@ -53,7 +53,7 @@ export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: stri
   return workerProfile(ctx, { ...worker, ...overrides });
 }
 
-const allowed = ["mate_propose", "mate_dispatch", "mate_status", "mate_ack", "mate_continue"];
+const allowed = ["mate_propose", "mate_dispatch", "mate_status", "mate_ack", "mate_continue", "mate_extend"];
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} });
 
 export default function (pi: ExtensionAPI) {
@@ -105,7 +105,7 @@ export default function (pi: ExtensionAPI) {
       const snapshot = await rpc("status");
       if (stopping || owner !== generation) return;
       const events = snapshot.events.filter((e: any) => !delivered.has(e.id));
-      context.ui.setStatus("mate", `${snapshot.total_tasks} tasks · ${snapshot.events.length} pending (batch max 50)`);
+      context.ui.setStatus("mate", `${snapshot.open_tasks} open tasks · ${snapshot.events.length} pending (batch max 50)`);
       if (events.length) {
         // Message delivery is not acknowledgement. SQLite retains each event until mate_ack.
         await pi.sendMessage({ customType: "mate-wake", display: true, details: { events },
@@ -207,6 +207,10 @@ export default function (pi: ExtensionAPI) {
     description: "Record a task and resolve its local Git base to a commit. Omit base to use the project's required base_branch in mate.config.json; a conflicting base is refused. Without configured base_branch, an explicit base is required. No fetch or worktree acquisition. Ask the human to run /mate-approve ID. Reuse IDs for retries.",
     parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.Optional(Type.String()), brief: Type.String({ maxLength: 20000 }) }),
     async execute(_id, params) { return result(await rpc("propose", params)); } });
+  registerTool({ name: "mate_extend", label: "Propose additional scope",
+    description: "Propose additional scope for a stopped review/failed task in its existing worktree/session. brief contains only the addition, exclusions and checks. No approval or launch; ask the human to run /mate-approve ID, then use mate_continue. Same pending brief is idempotent; a different brief replaces the pending proposal. Cannot reopen complete tasks or change the base. Pending scope blocks continuation/completion until accepted or declined.",
+    parameters: Type.Object({ id: Type.String(), brief: Type.String({ maxLength: 20000 }) }),
+    async execute(_id, params) { return result(await rpc("propose_scope", params)); } });
   registerTool({ name: "mate_dispatch", label: "Dispatch approved task",
     description: "Start a human-approved task using Treehouse and pi in Herdr. Optional model/effort overrides; omitted values use mate.config.json worker defaults, then the supervisor's current settings. At most two workers. Retrying the same ID never acquires twice or changes its profile.",
     parameters: Type.Object({ id: Type.String(), ...profileFields }),
@@ -222,7 +226,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ events: Type.Array(Type.Integer({ minimum: 1 }), { minItems: 1, maxItems: 50 }), note: Type.String({ maxLength: 2000 }) }),
     async execute(_id, params) { return result(await rpc("ack", params)); } });
   registerTool({ name: "mate_continue", label: "Continue delegated task",
-    description: "Continue a stopped review/failed worker in its original worktree/session. Optional model/effort overrides; omitted values retain the task's saved settings, not the supervisor's. Same approved scope only; obtain human answers to blockers. Never use for uncertain launches.",
+    description: "Continue a stopped review/failed worker in its original worktree/session. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), using a new attempt with retained history. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
     parameters: Type.Object({ id: Type.String(), message: Type.String({ maxLength: 20000 }), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       const { tasks } = await rpc("status", { id: params.id });
@@ -235,7 +239,16 @@ export default function (pi: ExtensionAPI) {
         if (ctx.mode !== "tui") throw new Error("Human TUI approval required");
         const { tasks } = await rpc("status", { id: args.trim() });
         const task = tasks[0];
-        if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base approval");
+        if (task.pending_scope) {
+          if (!["review", "failed"].includes(task.state)) throw new Error("Only stopped review/failed tasks can extend scope");
+          const yes = await ctx.ui.confirm("Approve additional task scope?",
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. No push/merge/deploy approval. Declining discards only this pending addition.`);
+          await rpc("review_scope", { id: task.id, token: task.pending_scope.token, attempt: task.attempt, sha: task.sha, approve: yes });
+          ctx.ui.notify(yes ? "Additional scope approved; use mate_continue. No worker started." : "Pending addition discarded; approved scope unchanged", "info");
+          await poll(generation); // Durable approval event also replays after a restart.
+          return;
+        }
+        if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
         const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? No push/merge/deploy approval is included.`);
         if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
         await rpc("approve", { id: task.id, sha: task.sha });
@@ -252,10 +265,13 @@ export default function (pi: ExtensionAPI) {
         let task = tasks[0];
         if (task.state !== "complete") {
           if (task.state !== "review") throw new Error("Only a task awaiting review can be completed");
+          if (task.pending_scope || task.scope_history?.at(-1)?.first_attempt > task.attempt) {
+            throw new Error("Additional scope awaits approval/execution; review its result before completion");
+          }
           const yes = await ctx.ui.confirm("Accept task as complete?",
             `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\nConfirm you have reviewed and accept this result. This records acceptance, not independent verification. No push, merge, event acknowledgement or resource cleanup. Completion cannot be reopened in this version.`);
           if (!yes) { ctx.ui.notify("Not completed; task remains in review", "info"); return; }
-          task = await rpc("complete", { id: task.id, attempt: task.attempt });
+          task = await rpc("complete", { id: task.id, attempt: task.attempt, scope_revision: task.scope_history?.length ?? 0 });
           pi.sendMessage({ customType: "mate-completed", display: true,
             content: `Human accepted ${task.id} attempt ${task.attempt} as complete. Recorded local account: ${task.completed_by}. No push/merge/cleanup authorized without separate confirmation.` },
             { triggerTurn: false });

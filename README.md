@@ -93,7 +93,7 @@ Code verification/research/review must themselves be delegated.
 
 ## Commands
 
-- `/mate-approve ID` — human-only scope/base approval; no implicit push/merge/deploy approval.
+- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
 - `/mate-status` — show tasks/events without invoking a model.
 - `/mate-complete ID` — accept a stopped `review` task, then optionally confirm closing its worker tab.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
@@ -101,16 +101,48 @@ Code verification/research/review must themselves be delegated.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
 
 The supervisor gets only `mate_propose`, `mate_dispatch`, `mate_status`,
-`mate_continue`, `mate_ack`. The Mate extension selects this tool allowlist and
+`mate_continue`, `mate_extend`, `mate_ack`. The Mate extension selects this tool allowlist and
 blocks other model tool calls. Normal pi global extensions/skills still load;
 Mate does not disable their own startup hooks or background behavior. Only load
 global extensions you trust to coexist with the supervisor.
 
 `mate_continue` resumes a **stopped** review/failed worker in the same worktree
-and pi session, for the same approved scope. It does not reset or reacquire it.
+and pi session, for the same approved scope. It also supports the narrowly inspected
+unstarted-continuation recovery described below. It does not reset or reacquire it.
 Human answers to blockers go through the supervisor. Arbitrary live-pane steering
 is intentionally not exposed: inspect a live blocked worker yourself in Herdr
 rather than letting the supervisor blindly approve prompts.
+
+## Additional scope in the same worktree
+
+For a **stopped `review`/`failed` task**, ask Mate to add work to the existing task.
+Mate records `mate_extend {id, brief}` with only the proposed addition; the approved
+brief and worker settings stay unchanged. Then run `/mate-approve ID` to review the
+current scope, addition, repository, pinned base, branch and existing worktree.
+
+- Accepting appends the addition to the approved brief and saves its approval time,
+  local OS account, proposal token and first eligible attempt in `scope_history`.
+  `original_brief` and the original base approval remain intact. No worker starts.
+- Declining discards only that pending addition. While pending, continuation and
+  completion are blocked. Repeating the same pending brief is a no-op; a different
+  brief replaces it. Stale tokens/attempts/base confirmations and live worker locks
+  are refused. Combined approved scope is limited to 20,000 characters.
+- After approval, Mate uses **`mate_continue`**, never a new dispatch. The existing
+  endpoint/lease and capacity checks still apply. Worktree, dirty files, commits,
+  lease, branch, base, Pi session, reports, events and saved model/effort are retained;
+  there is no reset, rebase, reacquisition or startup rerun. Explicit model/effort
+  overrides still work. Every subsequent worker prompt includes the updated scope.
+- Approval creates a durable wake event, replayed after restart until acknowledged.
+  Inspect the current task with `mate_status`; old reports remain evidence for their
+  original attempts. Completion requires a new reviewed run covering the addition,
+  not merely acceptance of the old report; stale scope confirmations are refused.
+- `complete`, active and `attention` tasks cannot be extended. This does not authorize
+  push/merge/deploy or reopen completed tasks. Scope compliance remains an instruction
+  to trusted workers, not semantic enforcement of arbitrary continuation messages.
+
+After installing the change, reload/restart the supervisor **with workers stopped**
+to load both the new tool and control plane. Existing tasks need no database migration;
+back up stopped state before use and do not downgrade while additions are pending.
 
 ## Accepting a completed task
 
@@ -141,7 +173,8 @@ records remain. Missing tabs or validation errors do not undo task completion.
 Closure is journaled before the external operation. A lost/ambiguous response leaves
 `tab_close_state` as `closing`/`uncertain` and requires manual inspection, not automatic
 retry. Successful closure records `tab_closed_at`/`tab_closed_by`; repeats are no-ops.
-Completed tasks remain visible and cannot continue or reopen in this version;
+The footer counts only open (not `complete`) tasks, across all task pages.
+Completed tasks remain visible in `/mate-status` and cannot continue or reopen in this version;
 propose a new task if needed.
 
 ## Calm mode
@@ -345,11 +378,13 @@ attempt rather than counting the saved session history again.
   retry. The journal and any lease receipt are retained. No automatic re-acquire,
   process killing, or destructive rollback attempts to guess what happened.
   Any `attention` task blocks new dispatch/continuation until inspected and repaired;
-  an uncertain worker must not be ignored when enforcing the concurrency limit.
+  only the exact unstarted continuation being inspected by `mate_continue` is exempt
+  after passing recovery checks. Other attention tasks and the two-worker cap still block.
 - A hard-killed worker wrapper might leave its child running. Missing worker locks
   therefore become **attention**, not a resumable failure. Inspect the recorded
-  pane, lease and processes manually; the runtime intentionally has no force-repair
-  or force-cleanup command.
+  pane, lease and processes manually; the runtime has no general force-repair or
+  force-cleanup command. Only the narrow unstarted-continuation and pre-receipt
+  acquisition recoveries below are supported.
 
 ## Auto-wake and recovery
 
@@ -377,6 +412,91 @@ prevent automatic duplicate acquisition. No model calls are made just to wait.
 Closing the supervisor leaves workers running. Reopen with the **same MATE_HOME**
 to recover reports and task state. Existing live workers are not restarted. Ambiguous
 or missing workers are surfaced for inspection, not silently adopted/relaunched.
+
+### Continue after repairing a busy worker pane
+
+Keep the worker pane dedicated to Mate. Before every dispatch/continuation launch,
+Mate checks the original terminal identity, foreground process, shell children
+and shell process group (including background/stopped jobs). A shared TTY alone
+is not ownership: detached prompt helpers can retain it and are not rejected on
+that basis. Recovery still checks detached task/session and worktree processes. If Vite/Pi/another job is using it, no command or Ctrl-C is
+sent. An ordinary continuation rejected at preflight leaves its attempt/state intact.
+Launch commands explicitly enter the saved worktree root, even if the shell was
+left in a subdirectory. No worktree contents are changed by that `cd`.
+
+For an existing `attention: No worker lock after 60s` **continuation**, return the
+original pane to its shell yourself, then tell the supervisor it is fixed and ask
+to continue the same task. No supervisor shutdown, manual database edit or new base
+approval is required. `mate_continue` performs fail-closed checks under the worker
+lock before journaling the next attempt:
+
+- Exact socket/session/workspace/tab/pane/original terminal and Treehouse lease/holder.
+- Same isolated worktree, repository common directory, task branch and approved
+  commit ancestry; dirty edits and later task commits are retained, not reset.
+- Existing readable Pi JSONL session with the worktree identity, unchanged since
+  a prior report; no usage entry, event log, stderr or report for the missing attempt.
+  A recorded running/startup/acquisition crash is not eligible.
+- Shell-only foreground, no shell children or other shell-group processes, Treehouse's worktree process
+  inventory contains only that shell, and no OS command references the task/session.
+  Missing/malformed/unavailable inspection data is a refusal, not evidence of absence.
+- No pending scope addition, other attention task or exhausted worker capacity.
+
+Success retains the failed launch in `launch_recoveries` and emits a durable
+`launch-recovered` event on the old attempt, then starts a **new attempt** using the
+same session, worktree, lease, approval/scope and saved settings (unless explicitly
+overridden). Reports, usage, events and acknowledgements remain; no fake worker
+report is created. No startup rerun, acquisition, release, cleanup or auto-completion.
+A `launching` response is submission, not proof the new worker acquired its lock.
+The supervisor must check subsequent status/outcomes normally.
+
+This is explicit continuation after human pane repair, not a polling auto-relaunch
+or a generic orphan repair. Legacy missing continuations can qualify using their
+saved usage/artifacts; absent current usage is meaningful because the wrapper
+journals it **before** starting Pi. Any current-attempt execution evidence refuses
+recovery even if the process appears gone. OS snapshots cannot prove a shell is
+waiting at a prompt (a shell builtin may be busy), reserve it against human input,
+or identify arbitrary detached processes that changed identity/cwd. Keep the pane
+untouched during launch; ambiguity or a crashed worker still needs manual inspection.
+Run dev servers separately; recovery conservatively refuses other worktree processes.
+
+After installing this change with workers stopped, use `/reload` in the supervisor
+to load both the updated tool policy and control plane. `/mate-reconnect` alone does
+not reload tool descriptions. Existing task data needs no manual migration.
+
+### Recover a failed Treehouse acquisition (human-only)
+
+After manually inspecting/clearing Treehouse setup processes, worktrees and leases,
+Herdr panes and orphan workers, stop the supervisor normally and ensure workers are
+stopped. Keep the same `MATE_HOME`. Back up the stopped state before recovery.
+In your own terminal, from the Mate repository:
+
+```sh
+python3 bin/mate.py recover-acquire migrate-admin-application-form
+```
+
+This is an interactive local command, **not a supervisor/model tool or RPC**. It
+holds the supervisor and task worker locks, displays the saved task and requires
+an exact confirmation containing ID, attempt and full approved SHA. Declining
+leaves the task unchanged. Do not pipe confirmation or run it through an agent.
+
+The command only accepts `attention` **before any lease receipt was saved**. It
+refuses saved checkout/startup/endpoint/worker evidence, execution artifacts, an
+existing task branch, changed base policy, unavailable approved commit, malformed
+or unavailable Treehouse status, or any row still recording the task's holder.
+A missing receipt can hide external side effects: the human inspection is required;
+Treehouse status and an unlocked wrapper alone cannot prove no orphan exists.
+Later-phase failures remain `attention`; this is not a generic recovery bypass.
+
+Success returns the same task to `approved`, keeping its scope, repo, pinned SHA,
+branch and original approval timestamp. The complete prior record is retained in
+`recoveries`, with local user/time; pending events are not acknowledged or deleted.
+No cleanup, Git reset, lease acquisition, startup or worker launch occurs here.
+Restart the supervisor with the same home and request `mate_dispatch` for this ID
+when ready. The next dispatch uses a new attempt/holder, reuses the task directory
+without deleting evidence, and retains the saved model/effort and not-yet-run
+startup (dispatch profile overrides are ignored for recovered tasks). Base policy
+is checked again; moving the base branch never repins the approved SHA. Another
+uncertain acquisition requires another human recovery, never an automatic retry.
 
 ## State
 

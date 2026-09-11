@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Mate's local control plane. stdlib only; macOS/Linux. No Firstmate runtime imports."""
+from contextlib import closing
 import fcntl
 import json
 import math
@@ -131,6 +132,7 @@ def check_lease(task):
     matches = [r for r in rows if isinstance(r, dict) and str(Path(r.get("path", "")).resolve()) == task["worktree"]]
     if len(matches) != 1 or any(matches[0].get(k) != lease.get(k) for k in ("lease_id", "lease_holder")) or matches[0].get("status") != "leased":
         raise ValueError("Treehouse no longer confirms this task's exact lease")
+    return matches[0]
 
 
 def project_config(repo):
@@ -272,9 +274,51 @@ def approve(db, p):
     return task
 
 
-def check_capacity(db):
+def propose_scope(db, p):
+    task = load(db, p["id"])
+    if task["state"] not in ("review", "failed"):
+        raise ValueError("Only a stopped review/failed task can extend scope")
+    with lock(HOME / task["id"] / "run.lock"):
+        addition = text(p["brief"], "additional scope")
+        text(task["brief"] + "\n\nAdditional approved scope:\n" + addition, "combined scope")
+        if task.get("pending_scope", {}).get("brief") == addition:
+            return task
+        task["pending_scope"] = dict(token=uuid.uuid4().hex, brief=addition,
+                                     attempt=task["attempt"], proposed_at=time.time())
+        with db:
+            save(db, task)
+    return task  # Proposal never changes approval, resources or worker profile.
+
+
+def review_scope(db, p):
+    """Human command only: accept or discard the exact displayed proposal."""
+    task = load(db, p["id"])
+    pending = task.get("pending_scope")
+    if (task["state"] not in ("review", "failed") or not pending or
+        p.get("token") != pending["token"] or type(p.get("attempt")) is not int or
+        p["attempt"] != task["attempt"] or pending["attempt"] != task["attempt"] or
+        p.get("sha") != task["sha"] or type(p.get("approve")) is not bool):
+        raise ValueError("Scope confirmation no longer matches the pending task")
+    with lock(HOME / task["id"] / "run.lock"):
+        if p["approve"]:
+            brief = text(task["brief"] + "\n\nAdditional approved scope:\n" + pending["brief"], "combined scope")
+            task.setdefault("original_brief", task["brief"])
+            task["brief"] = brief
+            task.setdefault("scope_history", []).append(dict(pending, approved_at=time.time(),
+                approved_by=pwd.getpwuid(os.getuid()).pw_name, approved_via="mate-approve",
+                first_attempt=task["attempt"] + 1))
+        del task["pending_scope"]
+        with db:
+            save(db, task)
+            if p["approve"]:
+                event(db, task, "scope-approved-" + pending["token"],
+                      "Human approved additional scope. Inspect current brief; use mate_continue, not dispatch. No worker started.")
+    return task
+
+
+def check_capacity(db, inspected=None):
     fleet = tasks(db)
-    if any(t["state"] == "attention" for t in fleet):
+    if any(t["state"] == "attention" and t["id"] != inspected for t in fleet):
         raise ValueError("An uncertain task needs inspection before starting more workers")
     if sum(t["state"] in ("acquiring", "launching", "running") for t in fleet) >= 2:
         raise ValueError("Two workers are already active")
@@ -296,7 +340,7 @@ def dispatch(db, p):
     task = load(db, p["id"])
     if task["state"] != "approved":
         return task  # Never re-acquire after an interrupted/ambiguous operation.
-    profile = worker_profile(p)
+    profile = worker_profile({}, task) if task.get("recoveries") else worker_profile(p)
     project = project_config(task["repo"])
     configured = project.get("base_branch")
     if configured != task.get("base_branch") or (configured and branch_ref(task["repo"], configured) != task.get("base_ref")):
@@ -315,9 +359,11 @@ def dispatch(db, p):
     pi_binary = shutil.which("pi")
     if not pi_binary:
         raise ValueError("pi is not on PATH")
-    task.update(project=project.get("name"), startup=project.get("startup"), pi_binary=pi_binary, **profile,
-                state="acquiring", attempt=1, holder=f"mate:{uuid.uuid4().hex}")
-    (HOME / task["id"]).mkdir(mode=0o700)
+    if not task.get("recoveries"):
+        task.update(project=project.get("name"), startup=project.get("startup"))
+    (HOME / task["id"]).mkdir(mode=0o700, exist_ok=bool(task.get("recoveries")))
+    task.update(pi_binary=pi_binary, **profile, state="acquiring",
+                attempt=task["attempt"] + 1, holder=f"mate:{uuid.uuid4().hex}")
     with db:
         save(db, task)  # Journal before non-transactional external acquire.
     try:
@@ -373,30 +419,189 @@ def dispatch(db, p):
     return load(db, task["id"])
 
 
+def recover_acquire(db, task):
+    """Offline human recovery only, before any saved lease/checkout/startup/endpoint."""
+    if (task["state"] != "attention" or not task.get("approved_at") or
+        not task.get("holder") or task["attempt"] < 1 or
+        any(key in task for key in ("lease", "worktree", "startup_state", "endpoint_receipt",
+                                    "pane", "tab", "usage", "followup"))):
+        raise ValueError("Recovery only supports acquisition failures before a saved lease; inspect later phases separately")
+    folder = HOME / task["id"]
+    if any(path.name != "run.lock" for path in folder.iterdir()):
+        raise ValueError("Task has execution artifacts; refusing acquisition recovery")
+    project = project_config(task["repo"])
+    configured = project.get("base_branch")
+    if configured != task.get("base_branch") or (configured and branch_ref(task["repo"], configured) != task.get("base_ref")):
+        raise ValueError("Project base_branch changed; new proposal/approval required")
+    if git(task["repo"], "rev-parse", "--verify", task["sha"] + "^{commit}") != task["sha"]:
+        raise ValueError("Approved commit is unavailable")
+    if git(task["repo"], "for-each-ref", "--format=%(refname)", "refs/heads/" + task["branch"]):
+        raise ValueError("Task branch already exists; refusing to reset or reuse it")
+    rows = json.loads(run(["treehouse", "status", "--json"], cwd=task["repo"]))
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or
+            not isinstance(row.get("path"), str) or not Path(row["path"]).is_absolute() or
+            not isinstance(row.get("status"), str) or not row["status"] or
+            (row["status"] == "leased" and any(not isinstance(row.get(key), str) or not row[key]
+                for key in ("lease_id", "lease_holder"))) for row in rows):
+        raise ValueError("Uncertain Treehouse status; recovery refused")
+    if any(row.get("lease_holder") == task["holder"] for row in rows):
+        raise ValueError("Treehouse still records this holder; inspect/release manually")
+    if load(db, task["id"]) != task:
+        raise ValueError("Task changed during confirmation")
+    previous = {key: value for key, value in task.items() if key != "recoveries"}
+    task.setdefault("recoveries", []).append(dict(task=previous, at=time.time(),
+        by=pwd.getpwuid(os.getuid()).pw_name, via="recover-acquire"))
+    task.update(state="approved")
+    task.pop("error", None)
+    with db:
+        save(db, task)
+        event(db, task, "acquire-recovered", "Human confirmed external cleanup; original approval retained. Explicit dispatch may retry acquisition.")
+    return task
+
+
+def recover_acquire_cli(ident):
+    # Not an RPC/model tool. Hold both locks across inspection, confirmation and commit.
+    if not sys.stdin.isatty():
+        raise ValueError("Recovery requires a human at an interactive terminal")
+    with lock(HOME / "supervisor.lock"), closing(connect()) as db:
+        task = load(db, ident)
+        with lock(HOME / ident / "run.lock"):
+            print(json.dumps(task, indent=2))
+            print("Confirm you inspected Treehouse setup/worktrees, leases, Herdr and processes; no orphan work remains.")
+            print("No cleanup or worker launch will occur. Saved profile/startup and approved base are retained.")
+            expected = f"recover {ident} {task['attempt']} {task['sha']}"
+            if input(f"Type exactly: {expected}\n> ") != expected:
+                print("Cancelled; task unchanged")
+                return
+            recover_acquire(db, task)
+            print("Recovered to approved. Restart the same Mate home; explicitly request dispatch when ready.")
+
+
+def ready_pane(task):
+    pane = check_endpoint(task, task["pane"])
+    original = task.get("endpoint_receipt", {}).get("root_pane", {}).get("terminal_id")
+    if not original or pane.get("terminal_id") != original:
+        raise ValueError("Worker terminal identity changed; inspect the original pane")
+    process = herdr(task, "pane", "process-info", "--pane", task["pane"]).get("process_info", {})
+    foreground = process.get("foreground_processes", [])
+    shell = process.get("shell_pid")
+    if (process.get("pane_id") != task["pane"] or type(shell) is not int or shell <= 0 or
+        len(foreground) != 1 or foreground[0].get("pid") != shell):
+        raise ValueError("Worker pane is not an idle shell; return it to its shell, then request mate_continue. No keys sent.")
+    # ponytail: OS snapshots cannot detect busy shell builtins or reserve the prompt;
+    # keep the pane untouched during launch; use a shell handshake if Herdr adds one.
+    # A shared TTY is not ownership: detached prompt helpers can retain it.
+    # Shell children and its process group still block, including stopped jobs.
+    # Recovery separately checks detached task/session and worktree processes.
+    rows = {}
+    for line in run(["ps", "-axo", "pid=,ppid=,pgid=,tty=,comm=,args="]).splitlines():
+        pid, parent, group, tty, command, args = line.split(None, 5)
+        rows[int(pid)] = dict(parent=int(parent), group=int(group), tty=tty, command=command, args=args)
+    current = rows.get(shell)
+    if (not current or Path(current["command"]).name.lstrip("-") not in ("sh", "bash", "zsh", "fish", "dash", "ksh") or
+        current["tty"] in ("?", "??") or process.get("foreground_process_group_id") != current["group"]):
+        raise ValueError("Cannot confirm the pane's shell process identity")
+    if any(pid != shell and (row["parent"] == shell or row["group"] == current["group"])
+           for pid, row in rows.items()):
+        raise ValueError("Worker pane has background/stopped processes; inspect before continuing")
+    return shell, rows
+
+
+def inspect_missing_launch(db, task):
+    """Only an unstarted continuation, never a crashed Pi or uncertain acquisition."""
+    attempt = task["attempt"]
+    if (task.get("error") != "No worker lock after 60s. Resources retained; no automatic relaunch." or
+        task.get("missing_from", "launching") != "launching" or not task.get("approved_at") or
+        task.get("startup_state") not in (None, "succeeded") or not task.get("followup") or
+        not task.get("usage") or str(attempt) in task["usage"] or
+        not db.execute("SELECT 1 FROM events WHERE task=? AND attempt=? AND kind='worker-missing'",
+                       (task["id"], attempt)).fetchone()):
+        raise ValueError("Only an unstarted continuation can recover; uncertain launches require inspection")
+    folder = HOME / task["id"]
+    if any((folder / name).exists() or (folder / name).is_symlink() for name in
+           (f"events-{attempt}.jsonl", f"stderr-{attempt}.log", f"report-{attempt}.txt")):
+        raise ValueError("Attempt has execution artifacts; possible orphan worker, recovery refused")
+    shell, processes = ready_pane(task)
+    lease = check_lease(task)
+    wt = task["worktree"]
+    if (git(wt, "rev-parse", "--show-toplevel") != wt or wt == task["repo"] or
+        git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir") !=
+        git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir") or
+        git(wt, "symbolic-ref", "HEAD") != "refs/heads/" + task["branch"]):
+        raise ValueError("Worktree/repository/branch identity changed")
+    git(wt, "merge-base", "--is-ancestor", task["sha"], "HEAD")
+    session = folder / "session.jsonl"
+    if session.is_symlink():
+        raise ValueError("Saved Pi session path changed")
+    with session.open() as stream:
+        header = json.loads(stream.readline())
+        if (not isinstance(header, dict) or header.get("type") != "session" or header.get("version") != 3 or
+            header.get("cwd") != wt or not isinstance(header.get("id"), str)):
+            raise ValueError("Saved Pi session identity is invalid")
+        uuid.UUID(header["id"])
+        for line in stream:
+            entry = json.loads(line)
+            if not isinstance(entry, dict) or not isinstance(entry.get("type"), str) or entry["type"] == "session":
+                raise ValueError("Saved Pi session is malformed")
+    # Legacy launches have no session snapshot. A prior published report must postdate it.
+    reports = [p for p in folder.glob("report-*.txt") if p.stem[7:].isdigit() and int(p.stem[7:]) < attempt]
+    if not reports or session.stat().st_mtime_ns > max(p.stat().st_mtime_ns for p in reports):
+        raise ValueError("Session changed since the last reported run; inspect before recovery")
+    inventory = lease.get("processes")
+    if (not isinstance(inventory, list) or len(inventory) != 1 or
+        not isinstance(inventory[0], dict) or inventory[0].get("pid") != shell):
+        raise ValueError("Treehouse process inventory is uncertain or contains other worktree processes")
+    markers = (str(folder), header["id"], f"{ROOT / 'bin/mate.py'} worker {task['id']} ")
+    if any(any(marker in row["args"] for marker in markers) for row in processes.values()):
+        raise ValueError("Possible task/session process remains; recovery refused")
+
+
 def launch_worker(task):
+    with lock(HOME / task["id"] / "run.lock"):
+        ready_pane(task)  # Shared by dispatch and continuation; never type into Vite/Pi.
+    # The receiving wrapper needs this lock, so release it before submitting to Herdr.
     command = shlex.join(["env", f"MATE_HOME={HOME}", sys.executable, str(ROOT / "bin/mate.py"),
                           "worker", task["id"], str(task["attempt"])])
+    command = "cd -- " + shlex.quote(task["worktree"]) + " && " + command
     herdr(task, "pane", "run", task["pane"], command)
 
 
 def resume(db, p):
     task = load(db, p["id"])
-    if task["state"] not in ("review", "failed") or worker_alive(task):
-        raise ValueError("Only a stopped review/failed task can continue; uncertain launches require inspection")
+    if task["state"] not in ("review", "failed", "attention"):
+        raise ValueError("Only a stopped review/failed task or inspected missing launch can continue")
+    if task.get("pending_scope"):
+        raise ValueError("Pending additional scope requires human /mate-approve before continuing")
     profile = worker_profile(p, task)
-    check_capacity(db)
-    check_endpoint(task, task["pane"])
-    check_lease(task)
-    task.update(attempt=task["attempt"] + 1, state="launching", followup=text(p["message"], "message"), **profile)
-    with db:
-        save(db, task)
+    message = text(p["message"], "message")
+    recovering = task["state"] == "attention"
+    # Keep late old wrappers out until checks and the next-attempt journal commit finish.
+    with lock(HOME / task["id"] / "run.lock"):
+        if recovering:
+            inspect_missing_launch(db, task)
+        else:
+            ready_pane(task)
+            check_lease(task)
+        check_capacity(db, inspected=task["id"] if recovering else None)
+        if load(db, task["id"]) != task:
+            raise ValueError("Task changed during continuation checks")
+        with db:
+            if recovering:
+                previous = {k: v for k, v in task.items() if k != "launch_recoveries"}
+                task.setdefault("launch_recoveries", []).append(dict(task=previous, at=time.time(),
+                    via="mate_continue", outcome="launch-failed"))
+                event(db, task, "launch-recovered", "Inspected unstarted launch; continuing in the same worktree/session with a new attempt. Prior evidence and approval retained.")
+            task.update(attempt=task["attempt"] + 1, state="launching", followup=message, **profile)
+            task.pop("error", None)
+            task.pop("missing_from", None)
+            save(db, task)
     try:
         launch_worker(task)
     except Exception as exc:
         with db:
             event(db, task, "launch-uncertain", str(exc))
         raise
-    return task
+    return load(db, task["id"])
 
 
 def complete(db, p):
@@ -405,6 +610,10 @@ def complete(db, p):
         return task  # Repeated confirmation does not rewrite the acceptance record.
     if task["state"] != "review" or type(p.get("attempt")) is not int or p["attempt"] != task["attempt"]:
         raise ValueError("Only the reviewed attempt shown in the confirmation can be completed")
+    history = task.get("scope_history", [])
+    if (task.get("pending_scope") or p.get("scope_revision", 0) != len(history) or
+        (history and history[-1]["first_attempt"] > task["attempt"])):
+        raise ValueError("Scope changed or awaits approval/execution; review the new result before completion")
     try:
         guard = lock(HOME / task["id"] / "run.lock")
     except BlockingIOError:
@@ -513,7 +722,7 @@ def snapshot(db, p):
     start = int(p.get("task_offset", 0))
     if start < 0:
         raise ValueError("Invalid task offset")
-    result = {"total_tasks": len(all_tasks), "tasks": sorted(all_tasks, key=lambda t: t["updated"], reverse=True)[start:start + 50], "events": [dict(zip(("id", "task", "attempt", "kind", "note"), row))
+    result = {"total_tasks": len(all_tasks), "open_tasks": sum(t["state"] != "complete" for t in all_tasks), "tasks": sorted(all_tasks, key=lambda t: t["updated"], reverse=True)[start:start + 50], "events": [dict(zip(("id", "task", "attempt", "kind", "note"), row))
               for row in db.execute("SELECT id,task,attempt,kind,note FROM events WHERE ack IS NULL ORDER BY id LIMIT 50")]}
     if p.get("id"):
         task = load(db, p["id"])
@@ -531,7 +740,7 @@ def snapshot(db, p):
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t)} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "error", "completed_at", "completed_by", "completed_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
     else:
         task = load(db, p["id"])
         result["tasks"] = [dict(task, usage_total=usage_total(task))]
@@ -567,7 +776,7 @@ def reconcile(db):
         with db:
             task = load(db, task["id"])
             if task["state"] in ("acquiring", "launching", "running"):
-                task.update(state="attention",
+                task.update(missing_from=task["state"], state="attention",
                             error="No worker lock after 60s. Resources retained; no automatic relaunch.")
                 save(db, task)
                 event(db, task, "worker-missing", task["error"])
@@ -640,7 +849,8 @@ class NativeEvents:
 def serve():
     db = connect()
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
-    methods = dict(propose=propose, approve=approve, dispatch=dispatch, resume=resume,
+    methods = dict(propose=propose, approve=approve, propose_scope=propose_scope, review_scope=review_scope,
+                   dispatch=dispatch, resume=resume,
                    status=snapshot, ack=acknowledge, complete=complete, close_tab=close_tab)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
@@ -701,6 +911,8 @@ def worker(ident, attempt):
     folder = HOME / ident
     session = folder / "session.jsonl"
     prompt = task.get("followup", task["brief"])
+    if task.get("scope_history"):
+        prompt = "Current human-approved scope (including additions):\n" + task["brief"] + "\n\nContinuation instructions (within this scope only):\n" + prompt
     policy = (ROOT / "WORKER.md").read_text()
     args = [task["pi_binary"], "--tui-mode", "regular", "--no-prompt-templates",
             "-e", str(ROOT / "bin/worker-events.ts"),
@@ -788,11 +1000,13 @@ if __name__ == "__main__":
             serve()
         elif len(sys.argv) == 4 and sys.argv[1] == "worker":
             worker(task_id(sys.argv[2]), int(sys.argv[3]))
+        elif len(sys.argv) == 3 and sys.argv[1] == "recover-acquire":
+            recover_acquire_cli(task_id(sys.argv[2]))
         elif sys.argv[1:] == ["status"]:
             with connect() as db:
                 print(json.dumps(snapshot(db, {}), indent=2))
         else:
-            raise ValueError("Usage: mate.py serve | worker ID ATTEMPT | status")
+            raise ValueError("Usage: mate.py serve | worker ID ATTEMPT | status | recover-acquire ID")
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
