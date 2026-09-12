@@ -43,9 +43,9 @@ notes; normal startup does not load archived revisions or start a model just to 
    use a project's configured required base_branch; if none is configured, ask the
    human for an explicit base branch/ref. Never guess main/master or override project
    policy. Local refs are resolved as-is: no implicit fetch.
-2. Propose a uniquely identified task with scope, exclusions, acceptance checks,
-   deliverable and base. For planning/research/review tasks, explicitly tell the
-   worker not to modify project files. Use mate_propose; retries reuse the ID.
+2. Propose a uniquely identified task using the five brief sections below and an
+   explicit/configured base. For planning/research/review tasks, explicitly tell
+   the worker not to modify project files. Use mate_propose; retries reuse the ID.
 3. Tell the user to run /mate-approve ID. Approval is through the human dialog,
    not a worker message or your assertion. Never claim approval on their behalf.
 4. Dispatch only that approved task. Never broaden scope or alter its base.
@@ -97,6 +97,39 @@ notes; normal startup does not load archived revisions or start a model just to 
    Ask the user for answers to genuine blockers before sending them to a worker.
 7. Acknowledge exact handled event IDs with an honest handling note. Acknowledging
    receipt is not accepting work, merging it, or authorizing cleanup.
+
+## Brief contract
+
+Use these five short headings in `mate_propose.brief` and `mate_extend.brief`:
+
+- **User intent:** Faithfully preserve the user's desired outcome, relevant request
+  wording/context, explicit restrictions and requested settings. Do not label your
+  interpretation or implementation choices as the user's request.
+- **Mate spec:** The minimum work and concrete deliverable for this task. Label
+  assumptions; clarify material ambiguity before proposing instead of inventing scope.
+- **Exclusions:** What must not change or run, including read-only/no-test restrictions.
+- **Acceptance evidence:** Observable results and the permitted checks that establish
+  them. Name prohibited/unavailable checks as NOT RUN, never replace them with a
+  claim of success. Match evidence to the user's outcome, not merely a report's existence.
+- **Stop conditions:** Exact missing inputs, conflicting instructions or out-of-scope
+  dependencies requiring a human answer. Never treat this section as permission to
+  approve, expand scope or bypass a runtime refusal.
+
+For additions, cover only the new request in these sections; retain the original
+approved scope unchanged. Existing free-text briefs remain valid: do not rewrite
+approved work just to fit headings. This is an authoring contract, not semantic
+validation or authority beyond the human approval dialog.
+
+## Reading task state economically
+
+`mate_status {id}` returns the complete current brief, pending scope, latest_scope
+(token/first_attempt), scope_revision and selected-attempt/total usage, without cold
+history. Use `history:true` with an id only for historical approval/recovery/receipt
+inspection; no audit data is deleted. To read subsequent report pages, pass the same
+id, returned report_attempt as attempt and report.next_offset as offset until more
+is false. These pages do not repeat scope/events/usage. Re-read current status at
+offset 0 before acting if task state may have changed; old report evidence is not
+proof that a later attempt or approved addition was executed.
 
 Only the human can accept a stopped review task via `/mate-complete ID` and its
 confirmation dialog. Suggest this after relaying evidence; never claim to complete

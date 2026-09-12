@@ -1070,6 +1070,16 @@ def usage_total(task):
 
 
 def snapshot(db, p):
+    history = p.get("history", False)
+    if type(history) is not bool:
+        raise ValueError("history must be a boolean")
+    offset = p.get("offset", 0)
+    if type(offset) is not int or offset < 0:
+        raise ValueError("Invalid offset")
+    if (history or "attempt" in p or "offset" in p) and not p.get("id"):
+        raise ValueError("history, attempt and offset require a task id")
+    if offset and ("attempt" not in p or history):
+        raise ValueError("Report continuation requires an explicit attempt and no history")
     all_tasks = tasks(db)
     start = int(p.get("task_offset", 0))
     if start < 0:
@@ -1078,24 +1088,41 @@ def snapshot(db, p):
               for row in db.execute("SELECT id,task,attempt,kind,note FROM events WHERE ack IS NULL ORDER BY id LIMIT 50")]}
     if p.get("id"):
         task = load(db, p["id"])
-        attempt = int(p.get("attempt", task["attempt"]))
-        if attempt < 0 or attempt > task["attempt"] or ("attempt" in p and attempt == 0):
+        attempt = p.get("attempt", task["attempt"])
+        if type(attempt) is not int or attempt < 0 or attempt > task["attempt"] or ("attempt" in p and attempt == 0):
             raise ValueError("Invalid attempt")
         report = HOME / task["id"] / f"report-{attempt}.txt"
-        offset = int(p.get("offset", 0))
-        if offset < 0:
-            raise ValueError("Invalid offset")
+        result["report_attempt"] = attempt
+        if offset:
+            # Page the pinned report, not the task's growing brief/audit history.
+            result = dict(id=task["id"], report_attempt=attempt, current_attempt=task["attempt"],
+                          state=task["state"], updated=task["updated"])
         if report.exists():
             with report.open() as f:
                 f.seek(offset)
                 content = f.read(12000)
                 result["report"] = dict(path=str(report), text=content, next_offset=f.tell(), more=bool(f.read(1)))
+        elif offset:
+            raise ValueError("Report is unavailable for the requested attempt")
+        if offset:
+            return result
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
         result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
     else:
-        task = load(db, p["id"])
-        result["tasks"] = [dict(task, usage_total=usage_total(task))]
+        fields = ("id", "state", "updated", "repo", "base", "base_branch", "sha", "branch", "brief",
+                  "attempt", "approved_at", "provider", "model", "effort", "worktree", "pane", "tab",
+                  "same_tab_as", "error", "missing_from", "launch_stage", "pending_scope",
+                  "startup", "startup_state", "startup_started_at", "startup_finished_at", "startup_pid", "startup_exit_code",
+                  "completed_at", "completed_by", "completed_via", "completed_from",
+                  "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_close_error",
+                  "tab_closed_at", "tab_closed_by")
+        current = dict(task) if history else {k: task[k] for k in fields if k in task}
+        scopes = task.get("scope_history", [])
+        current.update(usage_total=usage_total(task), scope_revision=len(scopes))
+        if scopes:
+            current["latest_scope"] = {k: scopes[-1][k] for k in ("token", "first_attempt", "approved_at") if k in scopes[-1]}
+        result["tasks"] = [current]
         result["attempt_usage"] = task.get("usage", {}).get(str(attempt))
     return result
 

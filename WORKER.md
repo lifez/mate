@@ -19,6 +19,13 @@ When blocked on a human decision, STOP and include the exact question in your
 final report. Never wait forever for stdin or approve a risky operation yourself.
 The supervisor will relay the question and may resume this session with an answer.
 
+When the brief has User intent / Mate spec / Exclusions / Acceptance evidence /
+Stop conditions sections, keep the user's outcome distinct from implementation
+instructions. Work within the entire approved scope, not just one heading. Stop
+and report material conflicts or missing inputs; do not resolve them by expanding
+scope. Evaluate the requested acceptance evidence using only permitted checks;
+prohibited/unavailable checks stay NOT RUN. Older free-text briefs remain valid.
+
 End with a concise report: outcome, changed files, checks actually run and their
 results, remaining risks/blockers, and any local commit IDs. Never claim a check
 passed if you did not run it. Your final report is evidence for supervisor review,

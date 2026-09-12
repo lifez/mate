@@ -92,6 +92,21 @@ Quitting before the settled event is a failure, not inferred completion.
 A successful process exit becomes **review**, never automatic task completion.
 Code verification/research/review must themselves be delegated.
 
+## Task briefs
+
+New proposals and scope additions use five concise sections: **User intent**
+(the user's actual outcome and context), **Mate spec** (minimum work/deliverable),
+**Exclusions**, **Acceptance evidence** (permitted checks and expected results),
+and **Stop conditions** (missing inputs/conflicts requiring a human answer).
+Implementation choices must not be presented as the user's own intent. Prohibited
+or unavailable checks remain NOT RUN, not passing evidence. Additions describe only
+new work; approved scope and legacy free-text briefs are not rewritten.
+
+This is a supervisor/worker instruction contract, not a semantic validator. The
+human still reviews the exact brief and pinned base in `/mate-approve`; no new
+approval, execution or delivery authority is introduced. See `SUPERVISOR.md` for
+the authoring contract. No new schema or model call is needed to format a brief.
+
 ## Commands
 
 - `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
@@ -448,8 +463,9 @@ attempt rather than counting the saved session history again.
 
 - `/mate-status` or `mate_status` includes `usage_total`: input/output tokens,
   cache-read/cache-write tokens and `estimated_cost_usd` across tracked attempts.
-- `mate_status` with an `id` also includes the task's `usage` map keyed by attempt,
-  and `attempt_usage` for the selected `attempt` (current attempt by default).
+- `mate_status` with an `id` includes `attempt_usage` for the selected `attempt`
+  (current attempt by default). The full `usage` map keyed by attempt is available
+  with `history: true`, not repeated in ordinary status or subsequent report pages.
 - Estimates sum Pi's reported `usage.cost.total` in USD. Mate does not maintain a
   separate price table. **For an OpenAI subscription this is not an additional bill
   or a measurement of subscription quota remaining.** A reported zero may reflect
@@ -667,9 +683,28 @@ data/<id>/run.lock                 live wrapper ownership
 data/<id>/startup.log              private project setup output (never auto-delivered)
 ```
 
-`mate_status` returns 50 tasks per page (`task_offset`), 50 pending events per batch,
-and report text in 12k-character pages (`offset`/`next_offset`). Full logs remain on
-disk for manual inspection. Never commit `data/` or publish its reports/logs blindly.
+`mate_status` returns 50 tasks per page (`task_offset`) and 50 pending events per
+batch. With `id`, it returns current state/settings/startup/error, the complete
+current brief and pending scope, `scope_revision`, `latest_scope` token/first_attempt,
+usage totals, selected `attempt_usage`, and the first report page when available.
+Cold scope/recovery/cancellation history, original brief, receipts and the full
+per-attempt usage map are omitted by default. Use `{id, history: true}` only when
+those details are needed; this returns the full task journal, not raw logs. Human
+approval/completion dialogs still read full records internally and retain all gates.
+
+Reports are paged in 12k-character chunks. Use the returned `report_attempt` as
+`attempt` and `report.next_offset` as `offset` for the next call with the same id.
+Nonzero offsets require an explicit attempt and cannot be combined with history.
+They return only the pinned report page and current id/state/attempt/update time,
+not repeated scope, events or usage. Use the returned offset unchanged (it is a text
+stream seek cookie, not a character index), and continue until `report.more` is
+false. A new attempt does not redirect old-report pagination; reread current status
+at offset 0 before acting on possibly changed scope/state. A missing report is not
+proof of completion. Full logs remain on disk for manual inspection.
+
+No task data is deleted or migrated. Install/reload these runtime changes only after
+workers stop; existing sessions still contain older verbose tool results.
+Never commit `data/` or publish its reports/logs blindly.
 Do not update code or change the home path while workers are live. Back up state
 with workers stopped before changing schema; there is no schema migration system yet.
 

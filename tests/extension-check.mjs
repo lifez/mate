@@ -248,11 +248,17 @@ try {
   assert.match(tools.mate_continue.description, /unstarted continuation/);
   assert.match(tools.mate_continue.description, /No worker lock after 60s/);
   assert.match(tools.mate_continue.description, /Never force/);
-  await call('mate_propose', { id: 'inspect', repo, base: 'main', brief: 'Read-only fixture investigation.' });
+  const brief = '## User intent\nตรวจ fixture แบบ read-only\n## Mate spec\nReport file references.\n## Exclusions\nNo edits or tests.\n## Acceptance evidence\nReferences, tests NOT RUN.\n## Stop conditions\nAsk if fixture is missing.';
+  assert.match(tools.mate_propose.parameters.properties.brief.description, /User intent/);
+  assert.match(tools.mate_extend.description, /five brief sections/);
+  assert.equal(tools.mate_status.parameters.properties.history.type, 'boolean');
+  await call('mate_propose', { id: 'inspect', repo, base: 'main', brief });
   await commands['mate-approve'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'awaiting-base');
   approval = true;
-  await commands['mate-approve'].handler('inspect', ctx);
+  await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async (_title, body) => {
+    assert.ok(body.includes(brief), 'human sees the exact five-section brief'); return true;
+  } } });
   assert.equal((await call('mate_status')).tasks[0].state, 'approved');
   assert.equal(messages.filter(m => m.message.customType === 'mate-approved').length, 1);
   execFileSync('python3', ['-c', `import sqlite3,os\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nc.execute("INSERT INTO events(task,attempt,kind,note) VALUES ('inspect',0,'test','fixture outcome')")\nc.commit()`]);
@@ -310,8 +316,24 @@ try {
   assert.ok(dialog.includes(initialScope) && dialog.includes(scoped.sha));
   assert.match(dialog, /Revised accessibility checks/);
   assert.equal(scoped.state, 'review', 'approval does not dispatch or launch');
-  assert.equal(scoped.scope_history.length, 1);
-  assert.equal(scoped.original_brief, initialScope);
+  assert.equal(scoped.scope_revision, 1);
+  assert.equal(scoped.latest_scope.first_attempt, 2);
+  assert.equal(scoped.scope_history, undefined, 'cold history is not in ordinary model status');
+  const historical = (await call('mate_status', { id: 'inspect', history: true })).tasks[0];
+  assert.equal(historical.scope_history.length, 1);
+  assert.equal(historical.original_brief, initialScope);
+  assert.equal(historical.scope_history[0].token, scoped.latest_scope.token);
+  writeFileSync(join(process.env.MATE_HOME, 'inspect/report-1.txt'), 'ก'.repeat(12000) + 'remaining evidence');
+  const firstPage = await call('mate_status', { id: 'inspect', attempt: 1 });
+  const nextPage = await call('mate_status', { id: 'inspect', attempt: firstPage.report_attempt, offset: firstPage.report.next_offset });
+  assert.equal(nextPage.report.text, 'remaining evidence');
+  assert.equal(nextPage.tasks, undefined);
+  assert.equal(nextPage.events, undefined);
+  assert.equal(nextPage.report.more, false);
+  assert.ok(row('mate_status', output(nextPage))().length, 'Calm preserves report-only pages');
+  await assert.rejects(() => call('mate_status', { id: 'inspect', offset: 1 }), /explicit attempt/);
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.match(notices.at(-1)[0], /awaits approval\/execution/, 'human completion still checks full scope history');
   const approvalEvent = (await call('mate_status')).events.find(e => e.kind.startsWith('scope-approved-'));
   assert.ok(approvalEvent);
   await wait(() => messages.some(m => m.message.details?.events.some(e => e.id === approvalEvent.id)));
@@ -434,7 +456,8 @@ try {
   assert.equal((await call('mate_status')).open_tasks, 0, 'cancelled history is not open capacity');
   assert.equal(messages.filter(m => m.message.customType === 'mate-cancelled').length, 1);
   await commands['mate-cancel'].handler('cancel-me', ctx);
-  cancelled = (await call('mate_status', { id: 'cancel-me' })).tasks[0];
+  assert.equal(cancelled.cancellation_history, undefined, 'cancellation audit stays cold by default');
+  cancelled = (await call('mate_status', { id: 'cancel-me', history: true })).tasks[0];
   assert.equal(cancelled.cancellation_history.length, 1, 'repeat preserves original cancellation audit');
 
   execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['same_tab_as']='supervisor'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);

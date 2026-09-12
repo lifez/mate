@@ -50,6 +50,65 @@ class MateTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    def test_status_current_history_and_pinned_report_pages(self):
+        task = self.propose()
+        folder = self.home / task['id']
+        folder.mkdir()
+        report = 'หลักฐาน\n' * 4000
+        (folder / 'report-1.txt').write_text(report)
+        task.update(state='review', attempt=2, provider='test', model='fixture', effort='high',
+                    original_brief='original', scope_history=[dict(token='approved-token', first_attempt=3,
+                    approved_at=1, brief='cold scope ' * 2000)],
+                    pending_scope=dict(token='pending-token', attempt=2, brief='Not approved'),
+                    launch_recoveries=[dict(task=dict(brief='cold recovery ' * 3000))],
+                    lease=dict(lease_id='lease-fixture'), error='Still blocked',
+                    startup_state='succeeded', usage={'1': m.empty_usage()})
+        with self.db:
+            m.save(self.db, task)
+            m.event(self.db, task, 'report', 'Fixture report available')
+        before = m.load(self.db, 'fix')
+        first = m.snapshot(self.db, dict(id='fix', attempt=1))
+        current = first['tasks'][0]
+        for key in ('id', 'brief', 'sha', 'repo', 'branch', 'provider', 'model', 'effort',
+                    'pending_scope', 'error', 'startup_state'):
+            self.assertEqual(current[key], before[key])
+        for key in ('scope_history', 'original_brief', 'launch_recoveries', 'lease', 'usage'):
+            self.assertNotIn(key, current)
+        self.assertEqual(current['scope_revision'], 1)
+        self.assertEqual(current['latest_scope'], dict(token='approved-token', first_attempt=3, approved_at=1))
+        self.assertEqual(current['usage_total']['untracked_attempts'], [2])
+        self.assertIsNone(current['usage_total']['estimated_cost_usd'])
+        self.assertEqual(first['report_attempt'], 1)
+        self.assertEqual(first['attempt_usage'], before['usage']['1'])
+        full = m.snapshot(self.db, dict(id='fix', history=True))['tasks'][0]
+        for key, value in before.items():
+            self.assertEqual(full[key], value)
+        self.assertLess(len(json.dumps(current)), len(json.dumps(full)) // 5)
+        # A newer attempt must not redirect pagination to a different report.
+        task.update(attempt=3, state='running')
+        with self.db:
+            m.save(self.db, task)
+        (folder / 'report-3.txt').write_text('Different attempt')
+        collected = first['report']['text']
+        page = first
+        while page['report']['more']:
+            page = m.snapshot(self.db, dict(id='fix', attempt=first['report_attempt'], offset=page['report']['next_offset']))
+            self.assertEqual(set(page), {'id', 'report_attempt', 'current_attempt', 'state', 'updated', 'report'})
+            self.assertEqual((page['id'], page['report_attempt'], page['current_attempt'], page['state']), ('fix', 1, 3, 'running'))
+            collected += page['report']['text']
+        self.assertEqual(collected, report)
+        self.assertNotIn('report', m.snapshot(self.db, dict(id='fix', attempt=2)))
+        self.assertEqual(len(m.snapshot(self.db, {})['events']), 1, 'reads never acknowledge events')
+        self.assertEqual(m.load(self.db, 'fix'), task, 'reads never rewrite the journal')
+        for invalid in [dict(history=True), dict(attempt=1), dict(offset=1),
+                        dict(id='fix', history='true'), dict(id='fix', offset=-1),
+                        dict(id='fix', offset=True), dict(id='fix', offset=1.5),
+                        dict(id='fix', offset=1), dict(id='fix', offset=1, attempt=1, history=True),
+                        dict(id='fix', offset=1, attempt=2), dict(id='fix', attempt=0),
+                        dict(id='fix', attempt=True), dict(id='fix', attempt=1.5), dict(id='fix', attempt=4)]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                m.snapshot(self.db, invalid)
+
     def test_stow_memory_budget_history_conflicts_and_task_independence(self):
         self.propose()
         before = m.snapshot(self.db, {})
@@ -1365,7 +1424,12 @@ print('fixture-private-output')
             child.stdout.close(); child.stderr.close()
 
     def test_worker_report_and_zero_exit_provider_error(self):
-        self.propose()
+        brief = ('## User intent\nตรวจ fixture โดยไม่แก้โค้ด\n'
+                 '## Mate spec\nInspect fixture; return evidence.\n'
+                 '## Exclusions\nNo edits, tests or push.\n'
+                 '## Acceptance evidence\nFile references; tests NOT RUN.\n'
+                 '## Stop conditions\nAsk if the fixture is unavailable.')
+        m.propose(self.db, dict(id='fix', repo=str(self.repo), base='main', brief=brief))
         m.approve(self.db, dict(id="fix", sha=self.sha))
         with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", self.fake_herdr):
             task = self.dispatch(model="selected-model", effort="high")
@@ -1389,6 +1453,8 @@ print('fixture-private-output')
         self.assertEqual(m.confirm_recovered_worker(self.db, task)['launch_confirmation'], 'started')
         self.assertEqual(m.snapshot(self.db, {})['tasks'][0]['usage_total']['estimated_cost_usd'], 0.125)
         argv = json.loads((self.home / "argv.json").read_text())
+        self.assertEqual(argv[-1], brief, 'approved brief reaches worker unchanged')
+        self.assertEqual(m.snapshot(self.db, dict(id='fix'))['tasks'][0]['brief'], brief)
         self.assertEqual(argv[argv.index("--model") + 1], "selected-model")
         self.assertEqual(argv[argv.index("--thinking") + 1], "high")
         self.assertNotIn('-p', argv)

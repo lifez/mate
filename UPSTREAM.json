@@ -167,6 +167,17 @@
   "local_changes": [
     {
       "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned compact current status, opt-in full journal history and attempt-pinned report-only continuation pages; no audit deletion or schema change. Human approval/completion retain full internal reads and existing safety gates. Five-section brief authoring contract separates user intent from Mate spec, exclusions, acceptance evidence and stop conditions in the existing brief string; legacy briefs and human restrictions remain intact. No upstream code copied or delivery authority imported; semantic compliance is instructional.",
+      "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
+      "reviewed_scope": "Selected fm-brief.sh intent/spec split and deliverable/evidence sections only, reference-only; no fetch or whole-component audit, original baselines unchanged.",
+      "sources": [
+        { "path": "bin/fm-brief.sh", "blob": "750f19feba07a0c14de08df2a00ed927e5457664", "mode": "reference-only" }
+      ],
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "WORKER.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned /stow and mate_memory: model-directed inspect-before-update curation, bounded 12000-byte current notes and append-only cold revisions in SQLite, revision-checked saves, per-session stable startup snapshot, honest handoff with manual /new. No task/event/approval mutation, automatic reset, arbitrary file access, tier/decay engine, secondmate cascade or external routing. Additive memories table; reload with workers stopped. Reference-only concepts, no source code copied or existing baseline advanced.",
       "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
       "reviewed_scope": "Internal and public stow skills read completely; selected curation, open-record preservation, cold recovery and reset-safety contracts only. No helper implementation imported or full dependency audit.",

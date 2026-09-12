@@ -11,6 +11,21 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned compact status: default task inspection includes current approved and
+  pending scope, latest scope token/first-attempt, settings/error/startup and usage
+  totals; full historical journal is opt-in with `history: true`. Pinned subsequent
+  report pages omit repeated task/event/usage payloads. Human dialogs retain full
+  reads and existing approval/completion gates. No journal/schema mutation.
+- R06 reference-only brief authoring contract: selected `bin/fm-brief.sh` at local
+  Firstmate `a27646c` (no fetch), specifically Captain's intent vs Firstmate spec and
+  explicit deliverable/evidence sections. Mate uses five concise sections in its
+  existing brief string, adding exclusions and stop conditions; preserves human
+  restrictions, legacy briefs and existing approval. No scaffold code copied,
+  delivery modes imported or component baseline advanced. Semantic compliance is
+  instructional, not claimed from fake-model tests. Disposable checks cover compact
+  status, full-history reads, pinned Unicode report pagination, unchanged brief
+  delivery and human approval/completion gates.
+
 - Mate-owned `/stow` and `mate_memory`, referencing Firstmate's internal and public
   stow skills at local commit `869ae905779c4c366a45759be8676406a1aae85c` (both read in
   full; no fetch). Selected concepts: inspect-before-update, whole-memory curation,
