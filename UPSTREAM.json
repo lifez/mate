@@ -177,6 +177,14 @@
       "local_commit": null
     },
     {
+      "component_ids": ["R03", "R05"],
+      "description": "Reference-only Firstmate relaunch journal and postcondition pattern; Mate-owned narrow initial attempt-1 idle-shell preflight recovery via mate_continue. Fail closed on execution evidence, identity/lease/process uncertainty or changed HEAD; retain full old attempt and resources, no startup rerun. Observe durable post-Popen worker-started receipt for up to 10 seconds, never retry on timeout. No upstream shell code imported; original baselines retained.",
+      "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
+      "reviewed_scope": "Selected fm-control.sh relaunch checkpoint/journal/confirmation and fm-spawn.sh agent-free endpoint gates; related #4120 and #4172 changes only, not a full component audit.",
+      "paths": ["bin/mate.py", "tests/test_mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned /stow and mate_memory: model-directed inspect-before-update curation, bounded 12000-byte current notes and append-only cold revisions in SQLite, revision-checked saves, per-session stable startup snapshot, honest handoff with manual /new. No task/event/approval mutation, automatic reset, arbitrary file access, tier/decay engine, secondmate cascade or external routing. Additive memories table; reload with workers stopped. Reference-only concepts, no source code copied or existing baseline advanced.",
       "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
@@ -189,11 +197,25 @@
       "local_commit": null
     },
     {
-      "component_ids": ["R03", "R05"],
-      "description": "Reference-only Firstmate relaunch journal and postcondition pattern; Mate-owned narrow initial attempt-1 idle-shell preflight recovery via mate_continue. Fail closed on execution evidence, identity/lease/process uncertainty or changed HEAD; retain full old attempt and resources, no startup rerun. Observe durable post-Popen worker-started receipt for up to 10 seconds, never retry on timeout. No upstream shell code imported; original baselines retained.",
+      "component_ids": ["R02", "R06"],
+      "description": "Adopt Firstmate watcher native sendUserMessage transport for wakes/alarms instead of custom messages lost by the configured remote-compaction Codex history replacement. Mate-owned input hook re-reads pending reminded events and appends a labeled runtime attachment to native human input; preserves text/images, skips extension-origin input, no custom nextTurn or extra automatic turns. Retain durable ack/generation/launch guards. No global package/config edits. Real local TUI native message_end/wire tests plus optional installed compaction hooks with synthetic Codex checkpoint, negative custom control and reconstruction; no real provider call.",
       "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
-      "reviewed_scope": "Selected fm-control.sh relaunch checkpoint/journal/confirmation and fm-spawn.sh agent-free endpoint gates; related #4120 and #4172 changes only, not a full component audit.",
-      "paths": ["bin/mate.py", "tests/test_mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md"],
+      "reviewed_scope": "fm-primary-pi-watch.ts sendWake native user followUp transport only; this API was also used at the original baseline. Mate input attachment is local code, not a copy of the upstream branch/store stack.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "tests/extension-check.mjs", "tests/supervisor-tui-smoke.py", "SUPERVISOR.md", "README.md"],
+      "license": "third_party/firstmate/LICENSE",
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Selective Firstmate #3312 processing-request pacing adaptation: after one corrective wake, attach pending events to later human prompts via nextTurn without further automatic turns. Reuse Mate SQLite ack and generation ownership; atomically emit base-approved through the shared durable path, no legacy backfill. Keep custom-message transport, verified with captured localhost fake-model real supervisor TUI idle/busy requests and actual status/ack. No branch agent, processed store, direct launch or full upstream component update.",
+      "source_commit": "869ae905779c4c366a45759be8676406a1aae85c",
+      "reviewed_scope": "fm-branch-supervision.ts processing constants/presentUnprocessedOutcomes and related processing-turn regression only; adapt pacing, defer deterministic transcript entries and sequence-bound ack enforcement. Original component baseline unchanged.",
+      "sources": [
+        { "path": ".pi/extensions/fm-branch-supervision.ts", "blob": "682f0a087ab0f7942a0c04ce9986f1350a8ac20a" },
+        { "path": "tests/fm-pi-branch-extension.test.sh", "blob": "812a55eade30625c65dc45f97f59c5d17d7e1b52", "mode": "reference-only" }
+      ],
+      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "tests/extension-check.mjs", "tests/test_mate.py", "tests/supervisor-tui-smoke.py", "SUPERVISOR.md", "README.md"],
+      "license": "third_party/firstmate/LICENSE",
       "local_commit": null
     },
     {
@@ -315,6 +337,8 @@
     "python3 -m unittest discover -s tests -v",
     "node tests/extension-check.mjs",
     "python3 tests/tui-smoke.py",
+    "python3 tests/supervisor-tui-smoke.py",
+    "python3 tests/supervisor-tui-smoke.py --busy",
     "python3 tests/live-smoke.py"
   ],
   "verification": "13 stdlib checks including exact optional tab closure/refusal/ambiguity and usage aggregation/unknowns/persistence and completion gates/persistence and TUI argv/pipe separation/missing-settled/forced-kill, extension checks including human-only completion and bridge lifecycle, real Pi + real worker in PTY against localhost fake model, real Herdr/Treehouse + fake Pi including exact worker tab closure with owner pane/lease/report retained passed. Subscription-backed TUI E2E not run."

@@ -267,7 +267,10 @@ propose a new task if needed.
 
 Run `/calm on` to hide completed routine dispatch/continue, acknowledgement and
 uneventful status rows, plus redundant approval notifications. Report-only wake
-messages become a short **report ready (not verified)** notice. Report contents,
+historical custom messages become a short **report ready (not verified)** notice.
+New runtime wakes are native user messages for remote-compaction compatibility;
+they remain visible in Calm mode and are explicitly marked as runtime input.
+Report contents,
 blockers, failures, pending calls and human approval dialogs remain visible.
 Unknown results stay visible rather than being silently classified as routine.
 
@@ -539,8 +542,21 @@ concrete blocker; report wakes require reading and summarizing the report instea
 of repeating an old launching update. Events remain until `mate_ack` records handling.
 After Pi fully settles (including retries, compaction and queued messages), delivered
 but unacknowledged events receive **one corrective follow-up per session generation**.
-If still unhandled, a separate `UNHANDLED` footer names them until acknowledgement;
-there is no infinite model retry loop. This checks acknowledgement, not the semantic
+If still unhandled, a separate `UNHANDLED` footer names them until acknowledgement.
+Following Firstmate's bounded processing-request pacing, pending events then
+accompany later human prompts without starting more automatic turns. Wakes use
+Firstmate's **native user-message** transport, explicitly labeled as runtime data,
+not text typed by the human or new approval. This lets the installed remote-compaction
+extension retain them, unlike custom messages it drops when replacing history.
+After the reminder budget, Mate's input hook re-reads pending IDs and appends a
+labeled runtime attachment to human input (including queued input), not a custom
+`nextTurn` message. It preserves the human text/images and ignores extension-origin
+input to avoid recursion. Ack removes events from future attachments; queued native
+follow-ups can still be stale, so always inspect current state before acting.
+Empty or unrelated assistant replies never acknowledge events. There is no infinite
+model retry loop.
+Base approvals now use this same durable event path as scope approvals; older
+already-approved tasks are not backfilled or automatically dispatched. This checks acknowledgement, not the semantic
 correctness of a model's summary or handling note. Corrections never launch workers
 directly: the supervisor must recheck current scope/attempt and obey launch refusals. `/new`, `/resume`, `/reload` or restarting Mate replays pending
 events. Delivery is **at least once**, not exactly once; dispatch IDs and state gates
@@ -719,6 +735,11 @@ python3 -m unittest discover -s tests -v
 node tests/extension-check.mjs
 # Real Pi TUI in a PTY; localhost fake model, no subscription/API credentials.
 python3 tests/tui-smoke.py
+# Real supervisor TUI: native wake → bounded correction → human-input attachment → status/ack.
+python3 tests/supervisor-tui-smoke.py
+python3 tests/supervisor-tui-smoke.py --busy
+# Optional installed compaction integration (synthetic checkpoint, real package hooks, no network):
+MATE_COMPACTION_EXTENSION=/absolute/path/to/pi-openai-server-compaction node tests/extension-check.mjs
 # Opt-in: run inside Herdr; owns a unique test server and disposable repo/pool.
 python3 tests/live-smoke.py
 ```
@@ -733,6 +754,17 @@ The TUI smoke runs the real Python worker and real Pi in a pseudo-terminal again
 a localhost fake model. It checks native tool/report rendering, separate event
 transport, settled shutdown, durable report and pending wake event. It uses a fixture
 lease checker; the Herdr/Treehouse integration is covered by the separate live smoke.
+
+The supervisor TUI smoke uses real Pi and the real disposable control plane with a
+scripted localhost OpenAI-completions model. It captures outgoing wake messages,
+ignores two automatic presentations, then verifies one fresh native attachment on a
+human prompt, native user `message_end` delivery and real status/ack execution. `--busy` also delivers an event while
+the first model response is held open. No worker launches or real task state are used;
+this does not test real-model compliance. The optional compaction check imports the
+installed package without changing it: a synthetic matching Codex remote checkpoint
+and its actual `message_end`/`before_provider_request`/session reconstruction hooks
+verify native wakes and attachments survive, while a custom-message negative control
+is dropped. Those package hooks use a mocked context; no real Codex endpoint is called.
 
 These checks do **not** prove a real OpenAI model follows the workflow. The first
 real task should be a small read-only investigation with explicit base approval.

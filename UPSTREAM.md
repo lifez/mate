@@ -26,6 +26,18 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   status, full-history reads, pinned Unicode report pagination, unchanged brief
   delivery and human approval/completion gates.
 
+- R03/R05 reference-only narrow initial-launch recovery: inspected local Firstmate
+  `869ae905779c4c366a45759be8676406a1aae85c`, selected `fm-control.sh` relaunch
+  checkpoint/journal/postcondition and `fm-spawn.sh` agent-free endpoint gates;
+  related changes #4120 (`3e817d3`) and #4172 (`4768e98`) informed boundaries.
+  Mate-owned implementation reuses `mate_continue`, exact endpoint/lease/worker
+  locks and SQLite history. Only the initial attempt-1 idle-shell preflight refusal
+  with no execution evidence qualifies; retain resources/startup output and verify
+  a durable post-Popen receipt with a bounded observation, never resubmit on timeout.
+  No shell code, lifecycle stop/interrupt verbs, metadata stack or worktree cleanup
+  imported. Original component baselines/hashes/notices remain unchanged; not a
+  full Firstmate audit. Disposable Python and native Pi fake-model checks only.
+
 - Mate-owned `/stow` and `mate_memory`, referencing Firstmate's internal and public
   stow skills at local commit `869ae905779c4c366a45759be8676406a1aae85c` (both read in
   full; no fetch). Selected concepts: inspect-before-update, whole-memory curation,
@@ -43,17 +55,38 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   conflicts, idempotence, cold history, failed-save preservation, command refusal,
   new-session loading, stable prefix, no task/event changes and dev-mode no-op.
 
-- R03/R05 reference-only narrow initial-launch recovery: inspected local Firstmate
-  `869ae905779c4c366a45759be8676406a1aae85c`, selected `fm-control.sh` relaunch
-  checkpoint/journal/postcondition and `fm-spawn.sh` agent-free endpoint gates;
-  related changes #4120 (`3e817d3`) and #4172 (`4768e98`) informed boundaries.
-  Mate-owned implementation reuses `mate_continue`, exact endpoint/lease/worker
-  locks and SQLite history. Only the initial attempt-1 idle-shell preflight refusal
-  with no execution evidence qualifies; retain resources/startup output and verify
-  a durable post-Popen receipt with a bounded observation, never resubmit on timeout.
-  No shell code, lifecycle stop/interrupt verbs, metadata stack or worktree cleanup
-  imported. Original component baselines/hashes/notices remain unchanged; not a
-  full Firstmate audit. Disposable Python and native Pi fake-model checks only.
+- R02 native wake transport follow-up: use Firstmate watcher's `sendUserMessage`
+  (selected `sendWake` at local commit `869ae905779c4c366a45759be8676406a1aae85c`;
+  this API choice also existed at the original pinned baseline). The configured
+  pi-openai-server-compaction Codex remote-history hook drops custom messages,
+  explaining why the previous custom nextTurn adaptation did not solve the live
+  handoff. Mate-owned input hook now attaches still-pending reminded events to
+  native human input, re-reading SQLite, preserving text/images and skipping
+  extension-origin input; no custom nextTurn queue or extra automatic turns.
+  Watcher-down alarms also use native user transport. New wakes stay visible in
+  Calm; old custom renderers remain for history. No global package/config edits.
+  Tests: real local Pi TUI idle/busy native message_end + wire capture, and optional
+  actual installed compaction hooks with synthetic Codex checkpoint/reconstruction
+  (custom-message negative control drops, native input survives). No real provider
+  call or claim of guaranteed model compliance. Baseline/notices retained.
+
+- R02 selective follow-up adaptation: Firstmate #3312 bounded processing requests
+  → `nextTurn` after Mate's one corrective wake, then one pending batch per later
+  human prompt. Reuse Mate SQLite event/ack rather than import a processed-marker
+  store, branch agent or arm-child pipeline. Keep the custom-message transport
+  used by Firstmate's processing path; real local fake-model supervisor TUI captures
+  model-visible wake input and checks idle/streaming delivery, no third automatic
+  wake, status/ack execution and preserved unlaunched task. Base approval now
+  atomically emits a durable event through the same path (no legacy backfill).
+  Selected source: local Firstmate `869ae905779c4c366a45759be8676406a1aae85c`,
+  `.pi/extensions/fm-branch-supervision.ts` processing constants and
+  `presentUnprocessedOutcomes` only, blob `682f0a087ab0f7942a0c04ce9986f1350a8ac20a`;
+  related test reference `tests/fm-pi-branch-extension.test.sh` processing-turn case,
+  blob `812a55eade30625c65dc45f97f59c5d17d7e1b52`.
+  Decision: adapt pacing, defer deterministic transcript entries/ack binding,
+  do not import the branch/store stack. No fetch or whole-component review;
+  original baseline and initial hashes below remain unchanged. Existing MIT
+  attribution retained. See `plans/firstmate-approval-wake-findings.md` for limits.
 
 - Mate-owned wake handling correction: explicit approval/report actions in the
   shared durable wake, one unacknowledged-event reminder after `agent_settled` per

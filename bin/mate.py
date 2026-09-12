@@ -293,6 +293,7 @@ def approve(db, p):
     task.update(state="approved", approved_at=time.time())
     with db:
         save(db, task)
+        event(db, task, "base-approved", "Human approved scope and pinned base. Inspect current task; use mate_dispatch. No worker started.")
     return task
 
 

@@ -18,7 +18,9 @@ const installed = join(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' })
 const { createJiti } = await import(pathToFileURL(join(installed, 'node_modules/jiti/lib/jiti.mjs')).href);
 const jiti = createJiti(import.meta.url, { alias: {
   typebox: join(installed, 'node_modules/typebox/build/index.mjs'),
+  '@earendil-works/pi-ai/compat': join(installed, 'node_modules/@earendil-works/pi-ai/dist/compat.js'),
   '@earendil-works/pi-ai': join(installed, 'node_modules/@earendil-works/pi-ai/dist/index.js'),
+  '@earendil-works/pi-coding-agent': join(installed, 'dist/index.js'),
   '@earendil-works/pi-tui': join(installed, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
 const { default: factory, workerProfile, dispatchProfile } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
@@ -45,8 +47,15 @@ const pi = {
   registerCommand(name, command) { commands[name] = command; },
   registerMessageRenderer(name, renderer) { renderers[name] = renderer; },
   setActiveTools(names) { active = names; },
-  sendMessage(message, options) { messages.push({ message, options }); },
-  sendUserMessage(content, options) { messages.push({ message: { role: "user", content }, options }); },
+  sendMessage(message, options) {
+    assert.ok(!['mate-wake', 'mate-watch-error'].includes(message.customType), 'operational wakes must not use custom messages');
+    messages.push({ message, options });
+  },
+  sendUserMessage(content, options) {
+    // Test metadata only; the actual Pi API receives plain native user text.
+    const events = content.startsWith('MATE EVENT') ? JSON.parse(content.split('\n')[0].split(': ').slice(1).join(': ')) : [];
+    messages.push({ message: { role: 'user', customType: 'mate-wake', content, details: { events } }, options });
+  },
 };
 const previousMode = process.env.MATE_MODE;
 process.env.MATE_MODE = 'dev';
@@ -260,9 +269,13 @@ try {
     assert.ok(body.includes(brief), 'human sees the exact five-section brief'); return true;
   } } });
   assert.equal((await call('mate_status')).tasks[0].state, 'approved');
-  assert.equal(messages.filter(m => m.message.customType === 'mate-approved').length, 1);
+  const baseEvent = (await call('mate_status')).events.find(e => e.kind === 'base-approved');
+  assert.ok(baseEvent, 'base approval is durable, not a separate ephemeral send');
+  await wait(() => messages.some(m => m.message.details?.events.some(e => e.id === baseEvent.id)));
+  assert.match(messages.at(-1).message.content, /For base-approved events/);
+  await call('mate_ack', { events: [baseEvent.id], note: 'Fixture base approval inspected; dispatch blocked in fixture.' });
   execFileSync('python3', ['-c', `import sqlite3,os\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nc.execute("INSERT INTO events(task,attempt,kind,note) VALUES ('inspect',0,'test','fixture outcome')")\nc.commit()`]);
-  await wait(() => messages.find(m => m.message.customType === 'mate-wake'));
+  await wait(() => messages.some(m => m.message.details?.events.some(e => e.kind === 'test')));
   assert.equal(messages.find(m => m.message.customType === 'mate-wake').options.deliverAs, 'followUp');
   const count = messages.length;
   await sleep(2300);
@@ -273,7 +286,7 @@ try {
   assert.equal(messages.at(-1).message.customType, 'mate-wake', 'unacked event replays after restart');
   assert.deepEqual(ackRow(), [], 'persisted calm on survives restart');
   assert.equal(messages.at(-1).message.details.events[0].kind, 'test');
-  await call('mate_ack', { events: [1], note: 'Relayed fixture outcome' });
+  await call('mate_ack', { events: (await call('mate_status')).events.map(e => e.id), note: 'Relayed fixture outcome' });
   assert.equal((await call('mate_status')).events.length, 0);
   assert.equal(tools.mate_close_tab, undefined, 'tab closure is not a model tool');
   assert.equal(handlers.tool_call({ toolName: 'mate_close_tab' }).block, true);
@@ -359,7 +372,56 @@ try {
   let correctedCount = messages.length;
   handlers.agent_settled({}, ctx);
   await sleep(2300);
-  assert.equal(messages.length, correctedCount, 'only one corrective turn per event');
+  assert.equal(messages.length, correctedCount, 'no third automatic turn or custom nextTurn queue');
+  const humanInput = { source: 'interactive', text: 'Unrelated human question', images: [{ type: 'image' }] };
+  assert.equal(await handlers.input({ ...humanInput, source: 'extension' }, ctx), undefined, 'no recursive attachment to runtime wakes');
+  const attached = await handlers.input(humanInput, ctx);
+  assert.equal(attached.action, 'transform');
+  assert.ok(attached.text.startsWith(humanInput.text + '\n\n'));
+  assert.match(attached.text, /not part of the human's request/);
+  assert.match(attached.text, /scope-approved-/);
+  assert.equal(attached.images, undefined, 'Pi preserves original images when omitted by the transform');
+  assert.equal(messages.length, correctedCount, 'attachment itself starts no turn');
+  supervisorIdle = false;
+  assert.equal((await handlers.input(humanInput, ctx)).text, attached.text, 'queued human input also retains the wake');
+  supervisorIdle = true;
+  assert.equal((await handlers.input(humanInput, ctx)).text, attached.text, 'later human inputs retain unacked events');
+  // Optional real installed compaction extension: synthetic checkpoint, actual
+  // message_end and before_provider_request hooks, never provider/auth calls.
+  if (process.env.MATE_COMPACTION_EXTENSION) {
+    const { default: compaction } = await jiti.import(resolve(process.env.MATE_COMPACTION_EXTENSION, 'src/index.ts'));
+    const hooks = {};
+    compaction({ on: (name, fn) => { hooks[name] = fn; }, registerProvider() {} });
+    const model = { provider: 'openai-codex', api: 'openai-codex-responses', id: 'fixture', reasoning: false };
+    const branch = [{ type: 'compaction', id: 'synthetic-checkpoint', details: { remoteCompaction: {
+      version: 1, provider: 'openai-responses-compact', implementation: 'responses_compact_v1',
+      modelKey: 'openai-codex:openai-codex-responses:fixture',
+      replacementHistory: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'SYNTHETIC_CHECKPOINT' }] }],
+    } } }];
+    const cctx = { ...ctx, cwd: root, model, sessionManager: { getSessionId: () => 'mate-compaction-fixture', getBranch: () => branch } };
+    writeFileSync(join(root, '.pi/openai-server-compaction.json'), JSON.stringify({ enabled: true, notify: false }));
+    const payload = () => hooks.before_provider_request({ payload: { model: 'fixture', input: [{ role: 'user', content: 'RAW_INPUT_SENTINEL' }] } }, cctx);
+    const receive = message => {
+      branch.push({ type: 'message', id: `entry-${branch.length}`, message });
+      hooks.message_end({ message }, cctx);
+    };
+    try {
+      hooks.session_start({}, cctx);
+      hooks.message_end({ message: { role: 'custom', customType: 'mate-wake', content: 'LOST_CUSTOM_SENTINEL' } }, cctx);
+      assert.ok(payload(), 'real Codex remote-history hook must be active');
+      assert.doesNotMatch(JSON.stringify(payload()), /LOST_CUSTOM_SENTINEL|RAW_INPUT_SENTINEL/, 'negative control reproduces dropped custom wake');
+      for (const content of [messages.at(-1).message.content, attached.text]) {
+        receive({ role: 'user', content, timestamp: 1 });
+        const wire = JSON.stringify(payload());
+        assert.ok(wire.includes(JSON.stringify(content).slice(1, -1)), 'actual remote-history request retains native wake/attachment');
+        receive({ role: 'assistant', ...model, model: model.id, content: [{ type: 'text', text: 'ignored' }], timestamp: 2 });
+      }
+      const beforeReload = payload();
+      hooks.session_start({}, cctx);
+      assert.deepEqual(payload(), beforeReload, 'compaction reconstruction preserves native wake history without duplicates');
+      console.log('PASS: installed compaction Codex hook retains native wakes and human attachments after synthetic checkpoint/reload; custom negative control drops');
+    } finally { hooks.session_shutdown({}, cctx); }
+  }
   assert.match(statuses['mate-unhandled'], /UNHANDLED:.*inspect.*second/);
   assert.match(messages.at(-1).message.content, /do not launch again/);
   assert.match(messages.at(-1).message.content, /do not retry without resolving/);
@@ -379,6 +441,7 @@ try {
   handlers.agent_settled({}, ctx);
   await wait(() => statuses['mate-unhandled'] === undefined);
   assert.equal(messages.length, correctedCount, 'ack suppresses correction');
+  assert.equal(await handlers.input({ source: 'interactive', text: 'Next question' }, ctx), undefined, 'ack removes pending input attachment');
   await commands['mate-complete'].handler('inspect', ctx);
   assert.equal(notices.at(-1)[1], 'error', 'cannot accept an unexecuted scope addition');
   // Simulate a finished continuation in this disposable fixture, without Herdr or a model.

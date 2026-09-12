@@ -570,7 +570,7 @@ print('fixture-private-output')
             self.assertEqual(dirty.read_text(), 'Uncommitted work')
             self.assertEqual((folder / 'session.jsonl').read_text(), 'Saved session')
             self.assertEqual(m.snapshot(self.db, dict(id='fix', attempt=1))['report']['text'], 'Original evidence')
-            self.assertEqual(len(m.snapshot(self.db, {})['events']), 2)
+            self.assertEqual(len(m.snapshot(self.db, {})['events']), 3)
             continued['state'] = 'review'
             with self.db: m.save(self.db, continued)
             with self.assertRaisesRegex(ValueError, 'Scope changed'):
@@ -626,7 +626,15 @@ print('fixture-private-output')
             self.assertEqual(self.acquires, 0)
             with self.assertRaises(ValueError):
                 m.approve(self.db, dict(id="fix", sha="wrong"))
+            self.assertEqual(m.snapshot(self.db, {})['events'], [])
+            with patch.object(m, 'event', side_effect=RuntimeError('journal failure')):
+                with self.assertRaises(RuntimeError): m.approve(self.db, dict(id='fix', sha=self.sha))
+            self.assertEqual(m.load(self.db, 'fix')['state'], 'awaiting-base', 'approval and event are atomic')
             m.approve(self.db, dict(id="fix", sha=self.sha))
+            self.db.close(); self.db = m.connect()
+            self.assertEqual([e['kind'] for e in m.snapshot(self.db, {})['events']], ['base-approved'])
+            with self.assertRaises(ValueError): m.approve(self.db, dict(id='fix', sha=self.sha))
+            self.assertEqual(len(m.snapshot(self.db, {})['events']), 1, 'stale repeat cannot add another approval')
             m.git(self.repo, "-c", "user.name=Mate Test", "-c", "user.email=mate@test.invalid", "commit", "--allow-empty", "-m", "branch moved")
             new_sha = m.git(self.repo, "rev-parse", "HEAD")
             task = self.dispatch()
@@ -649,7 +657,7 @@ print('fixture-private-output')
         self.assertEqual(self.dispatch()["state"], "attention")
         with self.assertRaises(ValueError):
             m.resume(self.db, dict(id="fix", message="Retry"))
-        self.assertEqual(len(m.snapshot(self.db, {})["events"]), 1)
+        self.assertEqual([e['kind'] for e in m.snapshot(self.db, {})['events']], ['base-approved', 'launch-uncertain'])
 
     def test_acquire_recovery_preserves_approval_history_and_retries_once(self):
         self.configure_project(base_branch='main', startup=dict(command=['true']))
@@ -682,7 +690,7 @@ print('fixture-private-output')
             self.assertEqual(m.git(task['worktree'], 'rev-parse', 'HEAD'), self.sha)
             self.dispatch()
             self.assertEqual((self.acquires, self.launches), (1, 1))
-        self.assertEqual([e['kind'] for e in m.snapshot(self.db, {})['events']], ['launch-uncertain', 'acquire-recovered'])
+        self.assertEqual([e['kind'] for e in m.snapshot(self.db, {})['events']], ['base-approved', 'launch-uncertain', 'acquire-recovered'])
 
     def test_acquire_recovery_refuses_uncertainty_and_cli_requires_human(self):
         self.propose()
@@ -858,7 +866,7 @@ print('fixture-private-output')
         approved = m.approve(self.db, dict(id="fix", sha=self.sha))
         with self.db:
             m.event(self.db, task, "report", "Prior durable evidence")
-        report_id = m.snapshot(self.db, {})["events"][0]["id"]
+        report_id = next(e['id'] for e in m.snapshot(self.db, {})['events'] if e['kind'] == 'report')
         m.acknowledge(self.db, dict(events=[report_id], note="Retained prior evidence"))
         with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", side_effect=AssertionError("No Herdr operation for attempt 0")):
             inspection = m.inspect_cancel(self.db, dict(id="fix"))
@@ -873,7 +881,7 @@ print('fixture-private-output')
         self.assertFalse("lease" in cancelled or "worktree" in cancelled or "endpoint_receipt" in cancelled)
         self.assertFalse((self.home / "fix" / "session.jsonl").exists())
         self.assertEqual(m.snapshot(self.db, {})["open_tasks"], 0)
-        self.assertEqual(len(m.snapshot(self.db, {})["events"]), 1, "cancellation event is separate from prior acknowledged event")
+        self.assertEqual([e['kind'] for e in m.snapshot(self.db, {})['events']], ['base-approved', 'cancelled'], "cancellation preserves unacknowledged approval and prior report ack")
         audit = cancelled["cancellation_history"]
         self.assertEqual(m.cancel(self.db, self.cancel_params(inspection))["cancellation_history"], audit)
         with patch.object(m, "run", side_effect=AssertionError("No dispatch after cancellation")), patch.object(m, "herdr", side_effect=AssertionError("No Herdr operation")):
@@ -1123,7 +1131,7 @@ print('fixture-private-output')
         snapshot = m.snapshot(self.db, {})
         self.assertEqual(snapshot['tasks'][0]['completed_from'], 'failed')
         self.assertEqual(snapshot['tasks'][0]['error'], task['error'])
-        self.assertEqual(len(snapshot['events']), 1)
+        self.assertEqual(len(snapshot['events']), 2, 'completion preserves approval and failure events')
         self.assertEqual(snapshot['open_tasks'], 0)
 
     def test_pane_process_ownership_not_shared_tty_or_program_name(self):

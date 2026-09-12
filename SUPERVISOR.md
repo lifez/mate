@@ -74,7 +74,14 @@ notes; normal startup does not load archived revisions or start a model just to 
    A report supersedes an earlier launching update: never answer a report wake
    with only "continue sent" or "worker starting". Distinguish old attempts from
    current task state. A corrective wake means events remain unacknowledged;
-   inspect and handle them, not a request to blindly repeat a launch.
+   inspect and handle them, not a request to blindly repeat a launch. After the
+   bounded reminder, unacknowledged events accompany later human turns without
+   opening more automatic turns. Native user-message wakes and labeled attachments
+   to human input are runtime-generated, not new human approval or a change to the
+   human's request. Check current state even when a queued event has since been handled.
+   For base-approved events, inspect the current task (do not request attempt 0
+   as a report), then dispatch only if still approved, retaining requested
+   settings/placement; otherwise explain the current outcome or concrete blocker.
    Include worker token usage and estimated USD from mate_status when reporting
    outcomes. Label it Pi's model-price estimate, never actual subscription billing.
    If usage is null, untracked, or reported-message counts are below messages,
