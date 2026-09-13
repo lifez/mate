@@ -157,12 +157,22 @@ def check_lease(task):
     return matches[0]
 
 
-def project_config(repo):
-    """Trusted Mate config only; never discover executable config in a worker repo."""
+def mate_config():
     config = json.loads(CONFIG.read_text())
     if not isinstance(config, dict) or set(config) - {"worker", "projects"}:
         raise ValueError("Invalid Mate config")
-    projects = config.get("projects", {})
+    worker = config.get("worker", {})
+    if not isinstance(worker, dict) or set(worker) - {"model", "effort", "max_active"}:
+        raise ValueError("Invalid worker config")
+    limit = worker.get("max_active", 2)
+    if type(limit) is not int or limit < 1:
+        raise ValueError("worker.max_active must be a positive integer")
+    return config
+
+
+def project_config(repo):
+    """Trusted Mate config only; never discover executable config in a worker repo."""
+    projects = mate_config().get("projects", {})
     if not isinstance(projects, dict):
         raise ValueError("Invalid projects config")
     selected, seen = {}, set()
@@ -267,9 +277,15 @@ def propose(db, p):
     old = db.execute("SELECT data FROM tasks WHERE id=?", (ident,)).fetchone()
     if old:
         existing = json.loads(old[0])
-        if (existing["repo"], existing["base"], existing["brief"]) != (repo, p.get("base", existing["base"]), brief):
-            raise ValueError("Task ID already exists with different scope; choose a new ID")
-        return existing  # Retrying a tool call does not change its approved SHA.
+        if (existing["repo"], existing["base"]) != (repo, p.get("base", existing["base"])):
+            raise ValueError("Task ID already exists with a different repository or base; choose a new ID")
+        if existing["brief"] != brief:
+            if existing["state"] != "awaiting-base":
+                raise ValueError("Task ID already exists with different scope; choose a new ID")
+            existing["brief"] = brief
+            with db:
+                save(db, existing)
+        return existing  # Retrying or revising unapproved scope keeps the pinned SHA and branch.
     project = project_config(repo)
     configured = project.get("base_branch")
     base = text(p.get("base", configured), "base (required without project base_branch)", 256)
@@ -288,7 +304,8 @@ def propose(db, p):
 
 def approve(db, p):
     task = load(db, p["id"])
-    if task["state"] != "awaiting-base" or p["sha"] != task["sha"]:
+    if (task["state"] != "awaiting-base" or p["sha"] != task["sha"] or
+            p.get("brief", task["brief"]) != task["brief"]):
         raise ValueError("Approval no longer matches the pending task")
     task.update(state="approved", approved_at=time.time())
     with db:
@@ -343,8 +360,9 @@ def check_capacity(db, inspected=None):
     fleet = tasks(db)
     if any(t["state"] == "attention" and t["id"] != inspected for t in fleet):
         raise ValueError("An uncertain task needs inspection before starting more workers")
-    if sum(t["state"] in ("acquiring", "launching", "running") for t in fleet) >= 2:
-        raise ValueError("Two workers are already active")
+    limit = mate_config().get("worker", {}).get("max_active", 2)
+    if sum(t["state"] in ("acquiring", "launching", "running") for t in fleet) >= limit:
+        raise ValueError(f"{limit} workers are already active")
 
 
 def worker_profile(p, previous=None):
@@ -795,16 +813,19 @@ def inspect_missing_launch(db, task):
     attempt = task["attempt"]
     initial = attempt == 1 and not task.get("followup") and not task.get("usage")
     if initial:
-        # Legacy dispatch emitted this exact error before pane run. New records
-        # additionally distinguish preflight refusal from uncertain submission.
-        expected = "Worker pane is not an idle shell; return it to its shell, then request mate_continue. No keys sent."
-        if (task.get("error") != expected or task.get("launch_stage") not in (None, "preflight-refused") or
+        # Legacy dispatch emitted only the idle-shell error before pane run. New records
+        # distinguish either safe readiness refusal from uncertain submission.
+        legacy_error = "Worker pane is not an idle shell; return it to its shell, then request mate_continue. No keys sent."
+        error = task.get("error")
+        stage = task.get("launch_stage")
+        if (error not in (legacy_error, "Worker pane has background/stopped processes; inspect before continuing") or
+            stage not in (None, "preflight-refused") or (stage is None and error != legacy_error) or
             task.get("missing_from") is not None or not task.get("approved_at") or
             task.get("startup_state") not in (None, "succeeded") or
             (task.get("startup") and task.get("startup_state") != "succeeded") or
             task.get("recoveries") or task.get("launch_recoveries") or task.get("scope_history") or
             not db.execute("SELECT 1 FROM events WHERE task=? AND attempt=1 AND kind='launch-uncertain' AND note=?",
-                           (task["id"], expected)).fetchone() or
+                           (task["id"], error)).fetchone() or
             db.execute("SELECT 1 FROM events WHERE task=? AND kind NOT IN ('base-approved', 'launch-uncertain')",
                        (task["id"],)).fetchone()):
             raise ValueError("Only a proven initial preflight refusal can recover; uncertain launches require inspection")
@@ -978,6 +999,62 @@ def complete(db, p):
     finally:
         guard.close()
     return task  # No acknowledgement, resource cleanup, or Git operations.
+
+
+def return_lease(db, p):
+    task = load(db, p['id'])
+    lease = task.get('lease', {})
+    if (task['state'] != 'complete' or p.get('attempt') != task['attempt'] or
+        p.get('worktree') != task.get('worktree') or p.get('lease_id') != lease.get('lease_id') or
+        p.get('lease_holder') != lease.get('lease_holder')):
+        raise ValueError('Lease return requires the exact completed task/attempt/worktree/lease')
+    if task.get('lease_return_state') == 'returned':
+        return task
+    if task.get('lease_return_state') in ('returning', 'uncertain'):
+        raise ValueError('Previous Treehouse return is uncertain; inspect manually, do not retry blindly')
+    try:
+        guard = lock(HOME / task['id'] / 'run.lock')
+    except BlockingIOError:
+        raise ValueError('Worker is still active; cannot return its lease') from None
+    try:
+        current_lease = check_lease(task)
+        if task.get('tab_close_state') == 'closed':
+            if current_lease.get('processes') != []:
+                raise ValueError('Treehouse still reports worktree processes after tab closure')
+        else:
+            shell, _ = ready_pane(task)
+            processes = current_lease.get('processes')
+            if (not isinstance(processes, list) or len(processes) != 1 or
+                not isinstance(processes[0], dict) or processes[0].get('pid') != shell):
+                raise ValueError('Treehouse process inventory is uncertain or contains other worktree processes')
+        if git(task['worktree'], '-c', 'status.showUntrackedFiles=all', 'status', '--porcelain'):
+            raise ValueError('Worktree has uncommitted changes; commit or remove them before returning the lease')
+        if load(db, task['id']) != task:
+            raise ValueError('Task changed during lease return checks; confirm again')
+        task['lease_return_state'] = 'returning'
+        with db:
+            save(db, task)
+        try:
+            run(['treehouse', 'return', task['worktree'], '--if-lease-id', lease['lease_id'],
+                 '--if-lease-holder', lease['lease_holder']], cwd=task['repo'], timeout=120)
+            rows = json.loads(run(['treehouse', 'status', '--json'], cwd=task['repo']))
+            matches = [row for row in rows if isinstance(row, dict) and isinstance(row.get('path'), str)
+                       and str(Path(row['path']).resolve()) == task['worktree']] if isinstance(rows, list) else []
+            if (len(matches) != 1 or matches[0].get('status') != 'available' or
+                matches[0].get('lease_id') not in (None, '') or matches[0].get('lease_holder') not in (None, '')):
+                raise RuntimeError('Treehouse did not prove that the exact lease was returned')
+        except Exception as exc:
+            task.update(lease_return_state='uncertain', lease_return_error=str(exc))
+            with db:
+                save(db, task)
+            raise
+        task.update(lease_return_state='returned', lease_returned_at=time.time(),
+                    lease_returned_by=pwd.getpwuid(os.getuid()).pw_name)
+        with db:
+            save(db, task)
+        return task
+    finally:
+        guard.close()
 
 
 def close_tab(db, p):
@@ -1261,7 +1338,8 @@ def serve():
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
     methods = dict(propose=propose, approve=approve, propose_scope=propose_scope, review_scope=review_scope,
                    dispatch=dispatch, resume=resume, inspect_cancel=inspect_cancel, cancel=cancel,
-                   status=snapshot, memory=memory, ack=acknowledge, complete=complete, close_tab=close_tab)
+                   status=snapshot, memory=memory, ack=acknowledge, complete=complete,
+        return_lease=return_lease, close_tab=close_tab)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
     native = NativeEvents(db, selector)

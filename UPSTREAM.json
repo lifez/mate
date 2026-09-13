@@ -244,6 +244,12 @@
     },
     {
       "component_ids": ["R02", "R03", "R04", "R06"],
+      "description": "Mate-owned replacement of unapproved task scope: repeat mate_propose with the same ID/repository/base to update only an awaiting-base brief while retaining its pinned SHA and branch. Base approval includes the exact displayed brief so stale dialogs fail closed; approved proposals remain immutable. No upstream import or provenance baseline change.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R04", "R06"],
       "description": "Mate-owned additional scope for stopped review/failed tasks: mate_extend proposal, human-only exact token/attempt/base approval or rejection under worker lock, retained original approval and scope history, durable approval event and same-worktree/session continuation. Pending/unexecuted additions and stale scope confirmations block completion. No reset, startup rerun, reacquisition, complete-task reopening or upstream import; provenance snapshots unchanged.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
       "local_commit": null
@@ -286,8 +292,8 @@
     },
     {
       "component_ids": ["R02", "R03", "R05", "R06"],
-      "description": "Mate-owned optional second human confirmation after completion closes only the exact worker tab. Worker lock, original terminal identity, single-pane and foreground-shell gates; journal ambiguous close outcomes and retain leases/reports/cost. No new upstream code copied.",
-      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "AGENTS.md"],
+      "description": "Mate-owned separate human confirmations after completion close only the exact owned worker tab and return only the exact clean Treehouse lease. Worker lock, original terminal/process inventory, path/lease ID/holder and dirty-worktree gates; never use --force, journal ambiguous external outcomes, and retain task branch/reports/session/cost. No new upstream code copied.",
+      "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "README.md", "SUPERVISOR.md", "tests/test_mate.py", "tests/extension-check.mjs"],
       "local_commit": null
     },
     {
@@ -324,6 +330,12 @@
       "component_ids": ["R02", "R03", "R06"],
       "description": "Per-task model/effort overrides for dispatch and continuation; resolve against Pi model capabilities, persist selected profile, pass --thinking to worker CLI. Initial SHA-256 snapshots remain unchanged for comparison.",
       "paths": [".pi/extensions/mate-supervisor.ts", "bin/mate.py", "AGENTS.md"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned recovery fix: accept a recorded initial background/stopped-process preflight refusal after the existing fail-closed idle-pane, lease, worktree, branch, artifact and process checks. Preserve exact legacy idle-shell recovery; no upstream code copied.",
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "README.md", "SUPERVISOR.md", "tests/test_mate.py"],
       "local_commit": null
     },
     {

@@ -29,7 +29,7 @@ const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 git('init', '-b', 'main'); git('-c', 'user.name=Mate Test', '-c', 'user.email=mate@test.invalid', 'commit', '--allow-empty', '-m', 'base');
 const handlers = {}, tools = {}, commands = {}, renderers = {}, messages = [], notices = [], statuses = {};
-let active = ['read', 'write', 'bash', 'external_tool'], approval = false, closeApproval = false, expanded = false;
+let active = ['read', 'write', 'bash', 'external_tool'], approval = false, closeApproval = false, releaseApproval = false, expanded = false;
 const models = [
   { provider: 'openai-codex', id: 'main-model', reasoning: true },
   { provider: 'openai-codex', id: 'worker-model', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } },
@@ -39,7 +39,7 @@ let supervisorIdle = true, supervisorQueued = false;
 const ctx = { mode: 'tui', hasUI: true, model: models[0], thinkingLevel: 'high',
   isIdle: () => supervisorIdle, hasPendingMessages: () => supervisorQueued,
   modelRegistry: { find: (provider, id) => models.find(m => m.provider === provider && m.id === id) },
-  ui: { notify: (...args) => notices.push(args), setStatus(key, value) { statuses[key] = value; }, confirm: async title => title === 'Close worker Herdr tab too?' ? closeApproval : approval,
+  ui: { notify: (...args) => notices.push(args), setStatus(key, value) { statuses[key] = value; }, confirm: async title => title === 'Close worker Herdr tab too?' ? closeApproval : title === 'Return Treehouse worktree too?' ? releaseApproval : approval,
     getToolsExpanded: () => expanded, setToolsExpanded: value => { expanded = value; } } };
 const pi = {
   on(name, fn) { handlers[name] = fn; },
@@ -115,7 +115,7 @@ try {
   assert.throws(() => workerProfile(ctx, { model: 'other/vendor/model', effort: 'high' }), /unsupported/);
   const configPath = join(tmp, 'mate.config.json');
   const configure = data => writeFileSync(configPath, JSON.stringify(data));
-  configure({ worker: { model: 'openai-codex/worker-model', effort: 'xhigh' } });
+  configure({ worker: { model: 'openai-codex/worker-model', effort: 'xhigh', max_active: 5 } });
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
   assert.deepEqual(dispatchProfile(ctx, { effort: 'low' }, configPath), { provider: 'openai-codex', model: 'worker-model', effort: 'low' });
   assert.deepEqual(dispatchProfile(ctx, { model: 'main-model', effort: 'high' }, configPath), { provider: 'openai-codex', model: 'main-model', effort: 'high' });
@@ -127,7 +127,8 @@ try {
   configure({});
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}));
   for (const invalid of [null, [], { workers: {} }, { worker: null }, { worker: [] }, { projects: null }, { projects: [] },
-    { worker: { model: 1 } }, { worker: { model: ' ' } }, { worker: { effort: 'ultra' } }, { worker: { typo: true } }]) {
+    { worker: { model: 1 } }, { worker: { model: ' ' } }, { worker: { effort: 'ultra' } },
+    { worker: { max_active: 0 } }, { worker: { max_active: 1.5 } }, { worker: { typo: true } }]) {
     configure(invalid);
     assert.throws(() => dispatchProfile(ctx, {}, configPath), /Invalid/);
   }
@@ -265,8 +266,15 @@ try {
   await commands['mate-approve'].handler('inspect', ctx);
   assert.equal((await call('mate_status')).tasks[0].state, 'awaiting-base');
   approval = true;
+  const revisedBrief = brief.replace('Report file references.', 'Report revised file references.');
+  await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => {
+    await call('mate_propose', { id: 'inspect', repo, base: 'main', brief: revisedBrief });
+    return true;
+  } } });
+  assert.equal((await call('mate_status')).tasks[0].state, 'awaiting-base', 'stale displayed scope is not approved');
+  assert.equal(notices.at(-1)[1], 'error');
   await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async (_title, body) => {
-    assert.ok(body.includes(brief), 'human sees the exact five-section brief'); return true;
+    assert.ok(body.includes(revisedBrief), 'human sees the exact revised five-section brief'); return true;
   } } });
   assert.equal((await call('mate_status')).tasks[0].state, 'approved');
   const baseEvent = (await call('mate_status')).events.find(e => e.kind === 'base-approved');
@@ -290,6 +298,8 @@ try {
   assert.equal((await call('mate_status')).events.length, 0);
   assert.equal(tools.mate_close_tab, undefined, 'tab closure is not a model tool');
   assert.equal(handlers.tool_call({ toolName: 'mate_close_tab' }).block, true);
+  assert.equal(tools.mate_return_lease, undefined, 'lease return is not a model tool');
+  assert.equal(handlers.tool_call({ toolName: 'mate_return_lease' }).block, true);
   assert.equal(tools.mate_complete, undefined, 'completion is not a model tool');
   assert.equal(handlers.tool_call({ toolName: 'mate_complete' }).block, true);
   assert.equal(tools.mate_cancel, undefined, 'cancellation is not a model tool');
@@ -524,8 +534,12 @@ try {
   assert.equal(cancelled.cancellation_history.length, 1, 'repeat preserves original cancellation audit');
 
   execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['same_tab_as']='supervisor'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
-  await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => { throw new Error('Must not offer shared-tab closure'); } } });
-  assert.match(notices.at(-1)[0], /Shared tab and worker pane retained/);
+  await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async title => {
+    if (title === 'Return Treehouse worktree too?') return false;
+    throw new Error('Must not offer shared-tab closure');
+  } } });
+  assert.match(notices.at(-2)[0], /Shared tab retained/);
+  assert.match(notices.at(-1)[0], /lease retained/);
   assert.equal(tools.mate_dispatch.parameters.properties.same_tab_as.type, 'string');
   assert.match(tools.mate_dispatch.description, /same_tab_as/);
   await handlers.session_shutdown();

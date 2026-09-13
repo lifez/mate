@@ -45,10 +45,11 @@ export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: stri
     (config.worker !== undefined && !object(config.worker)) ||
     (config.projects !== undefined && !object(config.projects))) throw new Error(`Invalid worker config: ${configPath}`);
   const worker = config.worker ?? {};
-  if (Object.keys(worker).some(key => !["model", "effort"].includes(key)) ||
+  if (Object.keys(worker).some(key => !["model", "effort", "max_active"].includes(key)) ||
     (worker.model !== undefined && (typeof worker.model !== "string" || !worker.model.trim() || worker.model !== worker.model.trim())) ||
-    (worker.effort !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(worker.effort))) {
-    throw new Error(`Invalid worker model/effort config: ${configPath}`);
+    (worker.effort !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(worker.effort)) ||
+    (worker.max_active !== undefined && (!Number.isInteger(worker.max_active) || worker.max_active < 1))) {
+    throw new Error(`Invalid worker config: ${configPath}`);
   }
   return workerProfile(ctx, { ...worker, ...overrides });
 }
@@ -264,7 +265,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   registerTool({ name: "mate_propose", label: "Propose delegated task",
-    description: "Record a task and resolve its local Git base to a commit. Omit base to use the project's required base_branch in mate.config.json; a conflicting base is refused. Without configured base_branch, an explicit base is required. No fetch or worktree acquisition. Ask the human to run /mate-approve ID. Reuse IDs for retries.",
+    description: "Record a task and resolve its local Git base to a commit. Before approval, calling this again with the same ID/repo/base replaces its scope while retaining the pinned SHA and branch; after approval, scope is immutable here. Omit base to use the project's required base_branch in mate.config.json; a conflicting base is refused. Without configured base_branch, an explicit base is required. No fetch or worktree acquisition. Ask the human to run /mate-approve ID.",
     parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.Optional(Type.String()), brief: Type.String({ maxLength: 20000, description: "Five concise sections: User intent (faithful request/context), Mate spec (work and deliverable), Exclusions, Acceptance evidence (allowed checks and expected result), Stop conditions (blockers/questions). Preserve requested settings and restrictions; do not invent approval." }) }),
     async execute(_id, params) { return result(await rpc("propose", params)); } });
   registerTool({ name: "mate_extend", label: "Propose additional scope",
@@ -272,7 +273,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ id: Type.String(), brief: Type.String({ maxLength: 20000 }) }),
     async execute(_id, params) { return result(await rpc("propose_scope", params)); } });
   registerTool({ name: "mate_dispatch", label: "Dispatch approved task",
-    description: "Start a human-approved task using Treehouse and pi in Herdr. Optional model/effort overrides; omitted values use mate.config.json worker defaults, then the supervisor's current settings. Optional same_tab_as: a task ID or 'supervisor' opens a new pane in that exact tab, with a separate worktree/branch; omission creates a new tab. Never moves existing workers. Shared tabs are not closed by Mate. At most two workers. Retrying the same ID never acquires twice or changes its profile/placement.",
+    description: "Start a human-approved task using Treehouse and pi in Herdr. Optional model/effort overrides; omitted values use mate.config.json worker defaults, then the supervisor's current settings. Optional same_tab_as: a task ID or 'supervisor' opens a new pane in that exact tab, with a separate worktree/branch; omission creates a new tab. Never moves existing workers. Shared tabs are not closed by Mate. Active-worker capacity comes from worker.max_active in mate.config.json. Retrying the same ID never acquires twice or changes its profile/placement.",
     parameters: Type.Object({ id: Type.String(), same_tab_as: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,47}$", description: "Existing task ID, or supervisor for Mate's own tab. Omit for a new tab." })), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       return result(await rpc("dispatch", { id: params.id, ...(params.same_tab_as === undefined ? {} : { same_tab_as: params.same_tab_as }), ...dispatchProfile(ctx, params) }));
@@ -286,7 +287,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ events: Type.Array(Type.Integer({ minimum: 1 }), { minItems: 1, maxItems: 50 }), note: Type.String({ maxLength: 2000 }) }),
     async execute(_id, params) { return result(await rpc("ack", params)); } });
   registerTool({ name: "mate_continue", label: "Continue delegated task",
-    description: "Continue a stopped review/failed worker in its original worktree/session. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), or an initial attempt-1 idle-shell preflight refusal before any command was sent, using a new attempt with retained history. Initial recovery requires no session/usage/execution artifacts and unchanged approved HEAD; it retains startup files and does not rerun startup. It observes up to 10 seconds: launch_confirmation started proves Pi process creation only, not completion or continued liveness; unconfirmed is not permission to retry. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
+    description: "Continue a stopped review/failed worker in its original worktree/session. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), or an initial attempt-1 idle-shell/background-process preflight refusal before any command was sent, using a new attempt with retained history. Initial recovery requires no session/usage/execution artifacts and unchanged approved HEAD; it retains startup files and does not rerun startup. It observes up to 10 seconds: launch_confirmation started proves Pi process creation only, not completion or continued liveness; unconfirmed is not permission to retry. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
     parameters: Type.Object({ id: Type.String(), message: Type.String({ maxLength: 20000 }), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       const { tasks } = await rpc("status", { id: params.id });
@@ -335,7 +336,7 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
         const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? No push/merge/deploy approval is included.`);
         if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
-        await rpc("approve", { id: task.id, sha: task.sha });
+        await rpc("approve", { id: task.id, sha: task.sha, brief: task.brief });
         ctx.ui.notify(`Approved ${task.id}; supervisor dispatch pending. No worker started.`, "info");
         await poll(generation); // Same durable delivery, correction and replay as scope approval.
       } catch (error) { ctx.ui.notify(String(error), "error"); }
@@ -366,16 +367,31 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
             { triggerTurn: false });
         }
         ctx.ui.notify(`${task.id} is complete`, "info");
-        if (task.same_tab_as) { ctx.ui.notify("Shared tab and worker pane retained; close the pane manually if needed", "info"); return; }
-        if (task.tab_close_state === "closed") return;
-        if (task.tab_close_state) throw new Error("Task remains complete, but previous tab closure is uncertain; inspect manually");
-        const close = await ctx.ui.confirm("Close worker Herdr tab too?",
-          `${task.id}\nSession: ${task.session}\nWorkspace: ${task.workspace}\nTab: ${task.tab}\nPane: ${task.pane}\n\nClose only this worker tab if its terminal identity is unchanged, it has no extra panes and is back at its shell. Closing loses terminal scrollback and may end background shell jobs. Worktree, lease, Pi session, reports and cost records remain. Decline to keep the tab.`);
-        if (!close) { ctx.ui.notify("Task complete; worker tab retained", "info"); return; }
-        await rpc("close_tab", { id: task.id, attempt: task.attempt, tab: task.tab });
-        pi.sendMessage({ customType: "mate-tab-closed", display: true,
-          content: `Human confirmed closing ${task.id}'s worker tab ${task.tab}. Worktree, lease, reports, session and cost records retained.` }, { triggerTurn: false });
-        ctx.ui.notify("Worker tab closed; worktree and reports retained", "info");
+        if (task.same_tab_as) {
+          ctx.ui.notify("Shared tab retained; returning the lease may end its worker pane shell", "info");
+        } else if (task.tab_close_state !== "closed") {
+          if (task.tab_close_state) throw new Error("Task remains complete, but previous tab closure is uncertain; inspect manually");
+          const close = await ctx.ui.confirm("Close worker Herdr tab too?",
+            `${task.id}\nSession: ${task.session}\nWorkspace: ${task.workspace}\nTab: ${task.tab}\nPane: ${task.pane}\n\nClose only this worker tab if its terminal identity is unchanged, it has no extra panes and is back at its shell. Closing loses terminal scrollback and may end background shell jobs. Worktree, lease, Pi session, reports and cost records remain. Decline to keep the tab.`);
+          if (close) {
+            task = await rpc("close_tab", { id: task.id, attempt: task.attempt, tab: task.tab });
+            pi.sendMessage({ customType: "mate-tab-closed", display: true,
+              content: `Human confirmed closing ${task.id}'s worker tab ${task.tab}. Worktree, lease, reports, session and cost records retained.` }, { triggerTurn: false });
+            ctx.ui.notify("Worker tab closed; worktree and reports retained", "info");
+          } else {
+            ctx.ui.notify("Task complete; worker tab retained", "info");
+          }
+        }
+        if (task.lease_return_state === "returned") return;
+        if (task.lease_return_state) throw new Error("Task remains complete, but previous Treehouse return is uncertain; inspect manually");
+        const release = await ctx.ui.confirm("Return Treehouse worktree too?",
+          `${task.id}\nWorktree: ${task.worktree}\nLease: ${task.lease?.lease_id}\nHolder: ${task.lease?.lease_holder}\n\nReturn only this exact lease. Mate refuses uncommitted changes or unexpected processes; it never uses --force. Treehouse may terminate the retained worker pane shell, detach/reset the pooled worktree and reuse it. The task branch, Mate reports, Pi session and cost records remain.`);
+        if (!release) { ctx.ui.notify("Task complete; Treehouse lease retained", "info"); return; }
+        task = await rpc("return_lease", { id: task.id, attempt: task.attempt, worktree: task.worktree,
+          lease_id: task.lease?.lease_id, lease_holder: task.lease?.lease_holder });
+        pi.sendMessage({ customType: "mate-lease-returned", display: true,
+          content: `Human confirmed returning ${task.id}'s exact Treehouse lease ${task.lease.lease_id}. Task branch, reports, session and cost records retained.` }, { triggerTurn: false });
+        ctx.ui.notify("Treehouse lease returned; task records retained", "info");
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
   pi.registerCommand("mate-cancel", { description: "Human-only cancellation of an unstarted task: /mate-cancel TASK_ID",

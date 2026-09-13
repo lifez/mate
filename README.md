@@ -107,11 +107,17 @@ human still reviews the exact brief and pinned base in `/mate-approve`; no new
 approval, execution or delivery authority is introduced. See `SUPERVISOR.md` for
 the authoring contract. No new schema or model call is needed to format a brief.
 
+Before approval, proposing the same task ID again with the same repository and base
+replaces its scope while retaining the pinned SHA and branch. This lets the human
+refine a proposal without cancelling it. An approval dialog that was opened before
+the replacement is stale and refuses approval; run `/mate-approve ID` again to review
+the current scope. After approval, `mate_propose` cannot change the scope.
+
 ## Commands
 
 - `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
 - `/mate-status` — show tasks/events without invoking a model.
-- `/mate-complete ID [--force]` — accept a stopped `review` task (`--force` also permits `failed`), then optionally confirm closing its worker tab.
+- `/mate-complete ID [--force]` — accept a stopped `review` task (`--force` also permits `failed`), then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
@@ -160,7 +166,9 @@ and rechecks the saved target, ignoring new placement overrides.
 After `/mate-complete`, tasks created this way **never offer or permit whole-tab
 closure**, even if only their pane remains. Close the stopped pane manually if
 needed. For tasks that originally created a tab, existing extra-pane checks still
-prevent closing a tab containing related workers. No automatic pane cleanup.
+prevent closing a tab containing related workers. Returning its Treehouse lease is
+a separate confirmation and may end that worker pane's idle shell; it never closes
+the shared tab.
 
 Reload the supervisor with workers stopped to load the updated tools/control plane.
 No task-state migration is required; old single-tab tasks retain their behavior.
@@ -243,10 +251,11 @@ Mate, not an authenticated GitHub/person identity), and `completed_via`.
 Repeating the command preserves the original record. It is a human command, not
 a model tool; no model call is needed to accept a task.
 
-Completion itself does not acknowledge pending events, push/merge, release the
-Treehouse lease or delete reports. For tasks that created their own tab, a **separate confirmation** then offers to close
-the task's worker Herdr tab. Declining keeps the tab; running `/mate-complete ID`
-again on an already-complete task offers closure again without rewriting acceptance.
+Completion itself does not acknowledge pending events, push/merge, return the
+Treehouse lease or delete reports. Separate confirmations then offer to close a
+dedicated worker Herdr tab and return the exact Treehouse lease. Declining either
+keeps that resource; running `/mate-complete ID` again offers it again without
+rewriting acceptance.
 
 Closure checks the worker lock, exact session/socket/workspace/tab/pane and original
 terminal identity, a single-pane tab, and shell-only foreground process information.
@@ -256,10 +265,16 @@ closing loses terminal scrollback and may end shell jobs. Do not reuse or alter 
 worker tab while confirming closure. Worktree/lease, reports, Pi session and cost
 records remain. Missing tabs or validation errors do not undo task completion.
 
-Closure is journaled before the external operation. A lost/ambiguous response leaves
-`tab_close_state` as `closing`/`uncertain` and requires manual inspection, not automatic
-retry. Successful closure records `tab_closed_at`/`tab_closed_by`; repeats are no-ops.
-The footer counts only open (not `complete` or `cancelled`) tasks, across all task pages.
+Closure and lease return are each journaled before their external operation. Lease
+return requires the exact saved path/ID/holder, a stopped worker, no unexpected
+worktree processes and a clean worktree; Mate never passes `--force`. Treehouse may
+end a retained worker pane's idle shell and reuse/reset the pooled worktree, while
+the Git task branch and Mate reports/session/cost records remain. The slot stays
+visible in `treehouse status` as `available`; returning it does not shrink the pool.
+A lost/ambiguous
+response leaves the corresponding state uncertain and requires manual inspection,
+not automatic retry. Successful operations record their local account/time; repeats
+are no-ops. The footer counts only open (not `complete` or `cancelled`) tasks, across all task pages.
 Completed and cancelled tasks remain visible in `/mate-status` and cannot continue or reopen in this version;
 propose a new task if needed.
 
@@ -335,13 +350,17 @@ Edit `mate.config.json` in the Mate repository (not the worker's repository):
 {
   "worker": {
     "model": "openai-codex/gpt-5.6-luna",
-    "effort": "xhigh"
+    "effort": "xhigh",
+    "max_active": 2
   }
 }
 ```
 
 New dispatches read this file each time; no restart is needed after config edits.
-Precedence per field is **task override → worker config → supervisor setting**.
+`worker.max_active` is a positive integer, defaults to `2`, and gates both new
+workers and continuations against the current active fleet. Raising it does not
+increase Treehouse pool capacity or model-provider quota.
+Precedence per model/effort field is **task override → worker config → supervisor setting**.
 Use `provider/model-id` to keep the default independent of the supervisor's provider.
 A bare ID uses the supervisor's provider. Use `{}` to inherit both supervisor settings.
 Missing/unreadable/invalid config fails dispatch instead of silently falling back.
@@ -485,14 +504,15 @@ attempt rather than counting the saved session history again.
 
 ## Safety and limits
 
-- At most **two active workers**. They share subscription quota with the supervisor.
+- Active workers are limited by `worker.max_active` in `mate.config.json` (default **2**).
+  They share subscription quota with the supervisor.
 - Base approval pins a commit; a moving branch does not change the approved base.
 - Treehouse lease ID/holder, Git common directory and exact Herdr endpoint IDs are checked.
 - Task branches are created without force/reset; pooled branches/commits are preserved.
-- No automatic push, PR publication, merge, deploy, worktree return or pane cleanup.
-  The only tab-close action is the separately confirmed option after `/mate-complete`.
-  Delivery mode is deliberately not selected yet. Leases/worktrees remain until you
-  inspect and explicitly release them; they count against Treehouse's pool capacity.
+- No automatic push, PR publication, merge, deploy or pane cleanup. After
+  `/mate-complete`, separate human confirmations can close an owned worker tab and
+  return its exact clean Treehouse lease. Declining retains the resource; retained
+  leases/worktrees count against Treehouse's pool capacity.
 - Worker reports are untrusted evidence, never instructions or human approval.
 - Workers are **trusted local processes, not sandboxed**. Git worktrees isolate
   changes, not filesystem/network permissions. The worker no-push/no-deploy rules
@@ -569,10 +589,11 @@ or missing workers are surfaced for inspection, not silently adopted/relaunched.
 ### Recover an initial launch refused before submission
 
 After the human returns the original pane to its idle shell, `mate_continue` also
-accepts the narrow initial attempt-1 `attention` case with the exact saved
-"Worker pane is not an idle shell ... No keys sent." refusal and matching durable
-`launch-uncertain` event. New records distinguish `launch_stage: preflight-refused`
-from uncertain submission; the exact legacy refusal is supported without migration.
+accepts the narrow initial attempt-1 `attention` case with a matching durable
+`launch-uncertain` event for either the idle-shell refusal or a saved
+`background/stopped processes` readiness refusal. New records require
+`launch_stage: preflight-refused`; the exact legacy idle-shell refusal remains
+supported without migration.
 A timeout, missing worker, crashed Pi or ambiguous pane command is **not** eligible.
 
 Under the worker lock it checks the original endpoint/terminal, exact lease/holder,

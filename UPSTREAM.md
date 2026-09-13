@@ -121,6 +121,12 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   background-job checks; detached prompt helpers are not worker jobs. Keep separate
   task/session and worktree orphan checks; no process-name whitelist.
 
+- Mate-owned replacement of unapproved task scope: repeating `mate_propose` with the
+  same ID/repository/base updates only an `awaiting-base` brief while retaining its
+  pinned SHA and branch. `/mate-approve` submits the exact displayed brief so a stale
+  dialog fails closed. Approved tasks remain immutable through proposal. No upstream
+  import or provenance baseline change.
+
 - Mate-owned scope additions for stopped review/failed tasks: `mate_extend` proposes,
   `/mate-approve` accepts/discards the exact pending token/attempt/base under a worker
   lock, and `mate_continue` reuses the existing worktree/session. Retain original
@@ -157,9 +163,10 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   และไม่รวม supervisor usage (ไม่มี upstream import เพิ่ม; regression + real Pi fixture checks)
 - Pi-owned control plane พร้อม Herdr native event helper และ 2s durable-result polling
 - Two-worker limit, stopped-worker continuation, stalled alerts และ fail-closed recovery
-- Mate-owned optional tab closure: หลัง complete ถามยืนยันแยกก่อนปิดแท็บ worker เท่านั้น;
-  ตรวจ original terminal identity/worker lock/single pane/foreground shell, journal uncertain close,
-  ไม่คืน lease/ลบ worktree/report/cost และไม่ import upstream cleanup machinery
+- Mate-owned optional tab closure + Treehouse return: หลัง complete ถามยืนยันแยก;
+  ตรวจ original terminal identity/worker lock/single pane/foreground shell ก่อนปิดแท็บ และคืนเฉพาะ
+  exact lease path/ID/holder เมื่อ worktree clean/process inventory ปลอดภัย โดยไม่ใช้ `--force`;
+  journal ambiguous external outcomes, เก็บ task branch/report/session/cost และไม่ import upstream cleanup machinery
 - Mate-owned `/mate-complete ID`: human confirmation จาก review → complete เท่านั้น,
   ตรวจ exact attempt + worker lock, บันทึกเวลา/OS account; ไม่ ack/cleanup/merge และไม่มี reopen
   (ไม่มี upstream import เพิ่ม; tests ตรวจ gate/idempotency/persistence และ UI deny/accept)
@@ -181,6 +188,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   เมื่อ `agent_settled` แล้ว graceful exit, เก็บ report/wake เหมือนเดิม
 - ยังไม่ทำ automatic cleanup, PR/merge/deploy, remote, multi-harness หรือ supervisor ย่อย
 - Ambiguous launch/crash เก็บสถานะ attention ให้ตรวจ ไม่เสี่ยง auto-relaunch
+- Mate-owned recovery fix: initial preflight refusal from a shell background/stopped
+  process can continue after the same fail-closed idle-pane/resource checks; legacy
+  idle-shell recovery remains exact. No upstream code copied.
 - ผ่าน local checks และ real Herdr/Treehouse smoke ด้วย fake pi; **ยังไม่ได้ทดสอบกับโมเดล OpenAI จริง**
 
 รายละเอียดใช้งาน/ข้อจำกัดอยู่ [README.md](README.md)
@@ -238,7 +248,8 @@ hash เปลี่ยนไม่ได้หมายถึง upstream เ�
 - ไม่รับ graph ของ PR/Relay/checks/pending-replies/secondmates และไม่ได้แปลง schema ของ Firstmate
 - Tests: durable ack/rollback, ownership lock, restart snapshot, missing/stalled worker,
   uncertain acquire, duplicate dispatch ใน `tests/test_mate.py`
-- Known ceiling: scan task records บน local disk และ poll ทุก 2s; ออกแบบสำหรับ personal fleet ≤2 active workers
+- Known ceiling: scan task records บน local disk และ poll ทุก 2s; `worker.max_active`
+  defaults to 2 and remains intended for a small personal fleet.
 
 ## R04 — Treehouse/worktree safety — REFERENCE-ONLY + OWN WORKFLOW
 

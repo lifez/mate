@@ -44,7 +44,8 @@ example as above. Git history is unchanged; untracking does not erase older comm
 {
   "worker": {
     "model": "openai-codex/gpt-5.6-luna",
-    "effort": "xhigh"
+    "effort": "xhigh",
+    "max_active": 2
   },
   "projects": {}
 }
@@ -56,7 +57,10 @@ example as above. Git history is unchanged; untracking does not erase older comm
   changing providers may require separate authentication or billing.
 - `effort`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
   The selected model must support an explicitly configured level.
-- Initial dispatch precedence per field: **task override → worker config → supervisor**.
+- `max_active`: positive integer limiting concurrent acquiring, launching and running
+  workers. Defaults to `2`. It applies to new dispatches and continuations as soon as
+  the file is saved; it does not resize the Treehouse pool or provider quota.
+- Initial dispatch precedence per model/effort field: **task override → worker config → supervisor**.
 - Continuation keeps the task's saved profile unless explicitly overridden. Config
   edits do not change the supervisor model or existing task profiles.
 
@@ -154,6 +158,7 @@ Never commit the env source/destination, credentials or startup logs.
 
 - Required branch policy: new proposals, checked again before initial dispatch.
 - Worker defaults and startup: initial dispatch reads current config.
+- Active-worker limit: every dispatch/continuation reads current config.
 - Continuation: saved worktree/base/profile; no startup replay.
 - Config-only edits: no supervisor restart needed.
 - Runtime updates: reload/restart the supervisor with workers stopped.

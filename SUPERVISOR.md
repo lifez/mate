@@ -88,7 +88,12 @@ notes; normal startup does not load archived revisions or start a model just to 
    say the total is incomplete/unknown rather than zero or free. It excludes your
    own supervisor usage and any usage not emitted in worker assistant messages.
    Worker exit/Herdr idle means neither tests passed nor the task is complete.
-6. Continue stopped workers only within approved scope. For additional work on a
+6. If the human changes an `awaiting-base` task's scope, call `mate_propose` again
+   with the same ID, repository and base and the complete revised brief. This replaces
+   only the unapproved scope while retaining its pinned SHA and branch; ask the human
+   to run `/mate-approve ID` again. Never cancel merely to revise unapproved scope.
+   After approval, `mate_propose` cannot revise it.
+7. Continue stopped workers only within approved scope. For additional work on a
    stopped review/failed task, use mate_extend with only the added scope, exclusions
    and acceptance checks; ask the human to run /mate-approve ID. Never treat a proposal
    as approval or smuggle additions into mate_continue. Pending additions block
@@ -102,7 +107,7 @@ notes; normal startup does not load archived revisions or start a model just to 
    required next step; never retry a refusal/uncertain launch without resolving it.
    Approval events are durable records, not permission to broaden scope further.
    Ask the user for answers to genuine blockers before sending them to a worker.
-7. Acknowledge exact handled event IDs with an honest handling note. Acknowledging
+8. Acknowledge exact handled event IDs with an honest handling note. Acknowledging
    receipt is not accepting work, merging it, or authorizing cleanup.
 
 ## Brief contract
@@ -141,8 +146,10 @@ proof that a later attempt or approved addition was executed.
 Only the human can accept a stopped review task via `/mate-complete ID` and its
 confirmation dialog. Suggest this after relaying evidence; never claim to complete
 it yourself or equate report/ack with acceptance. `complete` records acceptance,
-not independent verification or push/merge/cleanup authority. Completed tasks
-cannot continue; new work needs a new proposal and base approval.
+not independent verification or push/merge authority. Only the command's separate
+human prompts may close an owned tab or return the exact clean Treehouse lease;
+never invoke those mutation RPCs yourself. Completed tasks cannot continue; new
+work needs a new proposal and base approval.
 If the human explicitly wants to accept a failed result without another worker run,
 suggest `/mate-complete ID --force`. This remains a human-only confirmation, records
 the override and retains the error/evidence. It does not bypass active-worker,
@@ -187,9 +194,10 @@ the failed launch and starts a new attempt without changing approval or resource
 Do not claim recovery until the call succeeds, or claim a worker started from a
 `launching` response. Relay refusals and wait for their cause to be resolved; no
 force flags, Ctrl-C, new dispatch, database edits or generic crash recovery.
-Initial attempt-1 attention from the exact idle-shell preflight refusal can also
-use mate_continue after human pane repair. It must have no session/usage/execution
-evidence, matching refusal event, original resources and unchanged approved HEAD.
+Initial attempt-1 attention from an idle-shell or background/stopped-process
+preflight refusal can also use mate_continue after human pane repair. It must have
+no session/usage/execution evidence, a matching refusal event, original resources
+and unchanged approved HEAD.
 This creates its first Pi session using the approved brief, never reruns startup.
 The runtime retains the failed launch and observes a durable worker-started receipt.
 `launch_confirmation: started` proves Pi process creation only; inspect current

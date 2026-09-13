@@ -40,6 +40,7 @@ class MateTests(unittest.TestCase):
         self.sha = m.git(self.repo, "rev-parse", "HEAD")
         self.acquires = 0
         self.launches = 0
+        self.returns = []
         self.real_run = m.run
         self.leases = []
 
@@ -161,6 +162,14 @@ class MateTests(unittest.TestCase):
             return json.dumps(lease)
         if args[:2] == ["treehouse", "status"]:
             return json.dumps(self.leases)
+        if args[:2] == ["treehouse", "return"]:
+            row = next(row for row in self.leases if row['path'] == args[2])
+            self.assertEqual(args[args.index('--if-lease-id') + 1], row['lease_id'])
+            self.assertEqual(args[args.index('--if-lease-holder') + 1], row['lease_holder'])
+            self.assertNotIn('--force', args)
+            self.returns.append(args)
+            row.clear(); row.update(path=args[2], status='available', processes=[])
+            return ''
         return self.real_run(args, cwd, timeout)
 
     def fake_herdr(self, task, *args):
@@ -349,7 +358,24 @@ class MateTests(unittest.TestCase):
             task = self.dispatch()
             self.assertEqual(m.git(task['worktree'], 'rev-parse', 'HEAD'), self.sha)
 
+    def test_unapproved_proposal_scope_can_be_replaced(self):
+        original = self.propose()
+        params = dict(id='fix', repo=str(self.repo), base='main', brief='Revised fixture scope')
+        revised = m.propose(self.db, params)
+        self.assertEqual((revised['state'], revised['brief']), ('awaiting-base', params['brief']))
+        for key in ('repo', 'base', 'base_ref', 'sha', 'branch', 'attempt'):
+            self.assertEqual(revised[key], original[key])
+        with self.assertRaisesRegex(ValueError, 'no longer matches'):
+            m.approve(self.db, dict(id='fix', sha=self.sha, brief=original['brief']))
+        m.approve(self.db, dict(id='fix', sha=self.sha, brief=revised['brief']))
+        with self.assertRaisesRegex(ValueError, 'different scope'):
+            m.propose(self.db, dict(params, brief='Too late'))
+
     def test_project_config_validation_and_branch_kinds(self):
+        for worker in (None, [], {'max_active': 0}, {'max_active': True}, {'max_active': 1.5}, {'typo': 1}):
+            self.config.write_text(json.dumps({'worker': worker}))
+            with self.assertRaises(ValueError):
+                m.project_config(str(self.repo))
         for projects in ([], {'x': None}, {'x': {'repo': 'relative'}},
                          {'x': {'repo': str(self.repo), 'unknown': True}},
                          {'a': {'repo': str(self.repo)}, 'b': {'repo': str(self.repo / '..' / 'repo')}}):
@@ -803,6 +829,40 @@ print('fixture-private-output')
             with self.assertRaisesRegex(ValueError, 'uncertain'): m.close_tab(self.db, params)
         self.assertEqual(m.load(self.db, 'fix')['state'], 'complete')
 
+    def test_optional_lease_return_refuses_dirty_and_journals_uncertainty(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            task['state'] = 'review'
+            with self.db: m.save(self.db, task)
+            task = m.complete(self.db, dict(id='fix', attempt=1))
+            params = dict(id='fix', attempt=1, worktree=task['worktree'],
+                          lease_id=task['lease']['lease_id'], lease_holder=task['lease']['lease_holder'])
+            dirty = Path(task['worktree']) / 'unfinished.txt'
+            dirty.write_text('keep me')
+            with self.assertRaisesRegex(ValueError, 'uncommitted'):
+                m.return_lease(self.db, params)
+            dirty.unlink()
+            returned = m.return_lease(self.db, params)
+            self.assertEqual(returned['lease_return_state'], 'returned')
+            self.assertTrue(returned['lease_returned_by'])
+            self.assertEqual(m.return_lease(self.db, params), returned)
+            self.assertEqual(len(self.returns), 1)
+        self.leases[0] = dict(task['lease'], status='leased', processes=[dict(pid=100, name='zsh')])
+        with self.db: m.save(self.db, task)
+        def fail_return(args, cwd=None, timeout=30):
+            if args[:2] == ['treehouse', 'return']:
+                raise RuntimeError('lost return receipt')
+            return self.fake_run(args, cwd, timeout)
+        with patch.object(m, 'run', fail_return), patch.object(m, 'herdr', self.fake_herdr):
+            with self.assertRaisesRegex(RuntimeError, 'lost return receipt'):
+                m.return_lease(self.db, params)
+        self.assertEqual(m.load(self.db, 'fix')['lease_return_state'], 'uncertain')
+        with patch.object(m, 'run', side_effect=AssertionError('No blind retry')):
+            with self.assertRaisesRegex(ValueError, 'uncertain'):
+                m.return_lease(self.db, params)
+
     def test_usage_totals_preserve_unknowns_and_sum_attempts(self):
         task = self.propose()
         task.update(state='running', attempt=1)
@@ -1155,13 +1215,11 @@ print('fixture-private-output')
     def test_initial_preflight_recovery_preserves_resources_and_confirms_start(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
-        def busy(t, *args):
-            result = self.fake_herdr(t, *args)
-            if args[:2] == ('pane', 'process-info'):
-                result['process_info']['foreground_processes'] = [dict(pid=101)]
-            return result
-        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', busy):
-            with self.assertRaisesRegex(m.LaunchPreflightRefused, 'idle shell'):
+        def background(args, cwd=None, timeout=30):
+            output = self.fake_run(args, cwd, timeout)
+            return output + '\n120 100 120 ttys100 node vite' if args[0] == 'ps' else output
+        with patch.object(m, 'run', background), patch.object(m, 'herdr', self.fake_herdr):
+            with self.assertRaisesRegex(m.LaunchPreflightRefused, 'background/stopped'):
                 self.dispatch(effort='high')
         original = m.load(self.db, 'fix')
         self.assertEqual(original['launch_stage'], 'preflight-refused')
@@ -1170,6 +1228,7 @@ print('fixture-private-output')
         dirty = Path(original['worktree']) / 'keep.txt'
         dirty.write_text('preserved startup output')
         with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            self.assertTrue(m.inspect_missing_launch(self.db, original))
             def refused():
                 before = m.load(self.db, 'fix')
                 with self.assertRaises((ValueError, RuntimeError)):
@@ -1194,10 +1253,13 @@ print('fixture-private-output')
             with m.lock(folder / 'run.lock'):
                 with self.assertRaises(BlockingIOError):
                     m.resume(self.db, dict(id='fix', message='Continue'))
-            # The exact old dispatch shape remains recoverable without state migration.
+            # The exact old idle-shell dispatch shape remains recoverable without state migration.
             legacy = dict(original)
+            legacy['error'] = 'Worker pane is not an idle shell; return it to its shell, then request mate_continue. No keys sent.'
             del legacy['launch_stage']
-            with self.db: m.save(self.db, legacy)
+            with self.db:
+                m.save(self.db, legacy)
+                self.db.execute("UPDATE events SET note=? WHERE task='fix' AND kind='launch-uncertain'", (legacy['error'],))
             def started(t, *args):
                 result = self.fake_herdr(t, *args)
                 if args[:2] == ('pane', 'run'):
@@ -1407,8 +1469,16 @@ print('fixture-private-output')
             task["state"] = "running"
             with self.db:
                 m.save(self.db, task)
-        with self.assertRaisesRegex(ValueError, "Two workers"):
+        with self.assertRaisesRegex(ValueError, "2 workers"):
             self.dispatch()
+        self.config.write_text(json.dumps({'worker': {'max_active': 3}}))
+        m.check_capacity(self.db)
+        task = self.propose('three')
+        task['state'] = 'running'
+        with self.db:
+            m.save(self.db, task)
+        with self.assertRaisesRegex(ValueError, "3 workers"):
+            m.check_capacity(self.db)
 
     def test_supervisor_lock_and_restart_snapshot(self):
         self.propose()
