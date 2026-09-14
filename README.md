@@ -588,6 +588,11 @@ or missing workers are surfaced for inspection, not silently adopted/relaunched.
 
 ### Recover an initial launch refused before submission
 
+A newly created worker pane gets up to five seconds to finish shell initialization
+before Mate applies its existing idle-shell/process preflight. This wait never sends
+keys or retries a submitted command; identity errors fail immediately, and a pane
+that remains busy still becomes `attention` as below.
+
 After the human returns the original pane to its idle shell, `mate_continue` also
 accepts the narrow initial attempt-1 `attention` case with a matching durable
 `launch-uncertain` event for either the idle-shell refusal or a saved

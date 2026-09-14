@@ -22,6 +22,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 HOME = Path(os.environ.get("MATE_HOME", ROOT / "data")).expanduser().resolve()
 CONFIG = ROOT / "mate.config.json"
+NEW_PANE_READY_TIMEOUT = 5
 
 
 def run(args, cwd=None, timeout=30):
@@ -474,7 +475,7 @@ def dispatch(db, p):
             raise ValueError("Created terminal identity mismatch")
         with db:
             save(db, task)
-        launch_worker(task)
+        launch_worker(task, NEW_PANE_READY_TIMEOUT)
     except Exception as exc:
         # Do not roll back external resources or auto-retry an uncertain launch.
         with db:
@@ -895,10 +896,26 @@ class LaunchPreflightRefused(ValueError):
     pass
 
 
-def launch_worker(task):
+def wait_ready_pane(task, timeout):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return ready_pane(task)
+        except ValueError as exc:
+            if str(exc) not in (
+                    "Worker pane is not an idle shell; return it to its shell, then request mate_continue. No keys sent.",
+                    "Worker pane has background/stopped processes; inspect before continuing") or time.monotonic() >= deadline:
+                raise
+            time.sleep(.1)
+
+
+def launch_worker(task, readiness_timeout=0):
     with lock(HOME / task["id"] / "run.lock"):
         try:
-            ready_pane(task)  # Shared by dispatch and continuation; never type into Vite/Pi.
+            if readiness_timeout:
+                wait_ready_pane(task, readiness_timeout)
+            else:
+                ready_pane(task)  # Existing panes must already be idle; never type into Vite/Pi.
         except ValueError as exc:
             raise LaunchPreflightRefused(str(exc)) from exc
     # The receiving wrapper needs this lock, so release it before submitting to Herdr.

@@ -1212,13 +1212,51 @@ print('fixture-private-output')
                     with self.assertRaisesRegex(ValueError, 'background/stopped'):
                         m.ready_pane(task)
 
+    def test_new_pane_waits_for_shell_startup_without_resubmitting(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        checks = 0
+
+        def starting_herdr(task, *args):
+            nonlocal checks
+            if args[:2] == ('pane', 'process-info'):
+                checks += 1
+                if checks < 3:
+                    return dict(process_info=dict(pane_id=task['pane'], shell_pid=100,
+                        foreground_process_group_id=101, foreground_processes=[dict(pid=101)]))
+            return self.fake_herdr(task, *args)
+
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', starting_herdr), patch.object(m.time, 'sleep'):
+            task = self.dispatch()
+        self.assertEqual(task['state'], 'launching')
+        self.assertEqual(checks, 3)
+        self.assertEqual((self.acquires, self.launches), (1, 1))
+        self.assertEqual([row[0] for row in self.db.execute("SELECT kind FROM events WHERE task='fix'")], ['base-approved'])
+
+    def test_new_pane_readiness_does_not_retry_identity_errors(self):
+        error = ValueError('Worker terminal identity changed; inspect the original pane')
+        with patch.object(m, 'ready_pane', side_effect=error) as ready, patch.object(m.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(ValueError, 'identity changed'):
+                m.wait_ready_pane({}, 5)
+        ready.assert_called_once_with({})
+        sleep.assert_not_called()
+
+    def test_new_pane_readiness_still_refuses_after_deadline(self):
+        error = ValueError('Worker pane has background/stopped processes; inspect before continuing')
+        with patch.object(m, 'ready_pane', side_effect=error) as ready, \
+                patch.object(m.time, 'monotonic', side_effect=[10, 15]), patch.object(m.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(ValueError, 'background/stopped'):
+                m.wait_ready_pane({}, 5)
+        ready.assert_called_once_with({})
+        sleep.assert_not_called()
+
     def test_initial_preflight_recovery_preserves_resources_and_confirms_start(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
         def background(args, cwd=None, timeout=30):
             output = self.fake_run(args, cwd, timeout)
             return output + '\n120 100 120 ttys100 node vite' if args[0] == 'ps' else output
-        with patch.object(m, 'run', background), patch.object(m, 'herdr', self.fake_herdr):
+        with patch.object(m, 'NEW_PANE_READY_TIMEOUT', 0), patch.object(m, 'run', background), patch.object(m, 'herdr', self.fake_herdr):
             with self.assertRaisesRegex(m.LaunchPreflightRefused, 'background/stopped'):
                 self.dispatch(effort='high')
         original = m.load(self.db, 'fix')
