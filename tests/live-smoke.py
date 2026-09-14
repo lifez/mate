@@ -77,13 +77,21 @@ try:
     spec = importlib.util.spec_from_file_location("mate", ROOT / "bin/mate.py")
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     m.CONFIG = folder / "mate.config.json"
-    m.CONFIG.write_text('{}')  # Disposable config, independent of local installation.
+    m.CONFIG.write_text('{"worker":{"workspace_per_task":true}}')  # Disposable config, independent of local installation.
     db = m.connect()
     task = m.propose(db, dict(id="smoke", repo=str(repo), base="main", brief="Read-only fixture test; no network or code changes."))
     m.approve(db, dict(id="smoke", sha=task["sha"]))  # Test-only synthetic approval.
     git("-c", "user.name=Mate Test", "-c", "user.email=mate@test.invalid", "commit", "--allow-empty", "-m", "base moved")
     original = git("rev-parse", "HEAD")
     task = m.dispatch(db, dict(id="smoke", provider="openai-codex", model="fake-no-model-call"))
+    assert task['launcher_workspace'] == created['workspace']['workspace_id'], task
+    assert task['workspace'] != task['launcher_workspace'] and task['workspace_per_task'], task
+    workspaces = herdr('workspace', 'list')['result']['workspaces']
+    projected = next(row for row in workspaces if row['workspace_id'] == task['workspace'])
+    owner = next(row for row in workspaces if row['workspace_id'] == task['launcher_workspace'])
+    assert projected['label'] == '└ smoke' and owner['tab_count'] == 1 and owner['focused'], workspaces
+    extra = herdr('tab', 'create', '--workspace', task['workspace'], '--cwd', task['worktree'],
+                  '--label', 'logs', '--no-focus')['result']
     for _ in range(150):
         task = m.load(db, "smoke")
         if task["state"] in ("review", "failed", "attention"):
@@ -104,17 +112,35 @@ try:
     closed = m.close_tab(db, dict(id='smoke', attempt=task['attempt'], tab=task['tab']))
     assert closed['tab_close_state'] == 'closed'
     assert m.close_tab(db, dict(id='smoke', attempt=task['attempt'], tab=task['tab'])) == closed
+    remaining = herdr('workspace', 'list')['result']['workspaces']
+    projected = next(row for row in remaining if row['workspace_id'] == task['workspace'])
+    assert projected['tab_count'] == 1 and projected['active_tab_id'] == extra['tab']['tab_id'], projected
+    return_params = dict(id='smoke', attempt=task['attempt'], worktree=task['worktree'],
+                         lease_id=task['lease']['lease_id'], lease_holder=task['lease']['lease_holder'])
+    try:
+        m.return_lease(db, return_params)
+    except ValueError as exc:
+        assert 'processes after tab closure' in str(exc), exc
+    else:
+        raise AssertionError('Lease return ignored another tab using the worktree')
+    herdr('tab', 'close', extra['tab']['tab_id'])
+    for _ in range(50):
+        if m.check_lease(task).get('processes') == []:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError('Extra tab process did not leave the worktree')
+    returned = m.return_lease(db, return_params)
+    assert returned['lease_return_state'] == 'returned'
     assert herdr('pane', 'get', env['HERDR_PANE_ID'])['result']['pane']['pane_id'] == env['HERDR_PANE_ID']
-    assert Path(task['worktree']).is_dir()
     assert 'Fixture worker report' in m.snapshot(db, {'id': 'smoke'})['report']['text']
-    m.check_lease(task)  # Tab closure must retain its Treehouse lease.
     for ident, reference in (('split-owner', 'supervisor'), ('split-related', 'split-owner')):
         proposed = m.propose(db, dict(id=ident, repo=str(repo), base='main', brief='Read-only split fixture.'))
         m.approve(db, dict(id=ident, sha=proposed['sha']))
         split = m.dispatch(db, dict(id=ident, provider='openai-codex', model='fake', same_tab_as=reference))
         assert split['tab'] == created['tab']['tab_id'], split
         assert split['pane'] != env['HERDR_PANE_ID']
-        assert split['worktree'] != task['worktree']
+        assert split['holder'] != task['holder'] and split['lease']['lease_id'] != task['lease']['lease_id']
         for _ in range(150):
             split = m.load(db, ident)
             if split['state'] in ('review', 'failed', 'attention'):
@@ -148,7 +174,7 @@ try:
         m.check_lease(split)
     assert herdr('pane', 'get', env['HERDR_PANE_ID'])['result']['pane']['pane_id'] == env['HERDR_PANE_ID']
     ok = True
-    print("PASS: shared-tab supervisor/task split + continuation + closure refusal; real Herdr subscription/pane + real Treehouse lease + pinned base + fake Pi worker + durable report + duplicate dispatch guard + exact worker tab closure (lease/report/owner pane retained)")
+    print("PASS: task workspace preserves owner focus and sibling tabs, blocks lease return while occupied, and closes by exact endpoint; shared-tab split/continuation still work; real Herdr + Treehouse, fake Pi only")
 finally:
     if db:
         db.close()

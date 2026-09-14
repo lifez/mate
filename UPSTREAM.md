@@ -11,6 +11,13 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned natural-language dispatch profiles inside existing `mate.config.json`:
+  `dispatch.rules[].when/use/why` selects a concrete Pi model/effort before approval,
+  with human override → matching rule → worker default precedence and an explicit-field
+  dispatch backstop. Selected Firstmate `crew-dispatch` schema/judgment/backstop concepts
+  at local `a27646c` reference-only; no separate config file, harness switching, profile
+  arrays, quota routing or shell parser copied. Python/TypeScript validate fail closed.
+
 - Mate-owned compact status: default task inspection includes current approved and
   pending scope, latest scope token/first-attempt, settings/error/startup and usage
   totals; full historical journal is opt-in with `history: true`. Pinned subsequent
@@ -184,6 +191,10 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Mate-owned worker discovery: โหลด global/project skills/extensions ตาม Pi settings,
   trust project ต่อ run ด้วย `--approve`, ใช้ `MATE_MODE=dev` เฉพาะ Pi child กัน supervisor ซ้อน;
   คง explicit event bridge และปิด prompt templates (ไม่มี upstream import เพิ่ม)
+- Mate-owned dispatch routing: natural-language rules in existing `mate.config.json`,
+  concrete Pi model/effort only; human overrides win, unmatched work uses `worker`, and
+  active rules require explicit dispatch axes. No separate `crew-dispatch.json`, arrays,
+  quota selector or multi-harness routing.
 - Worker ใช้ native pi TUI + Mate-owned event bridge ผ่าน pipe แยก; จบ attempt
   เมื่อ `agent_settled` แล้ว graceful exit, เก็บ report/wake เหมือนเดิม
 - ยังไม่ทำ automatic cleanup, PR/merge/deploy, remote, multi-harness หรือ supervisor ย่อย
@@ -280,11 +291,17 @@ hash เปลี่ยนไม่ได้หมายถึง upstream เ�
 - Source blob: `7367a8db5c7361780990294e649044f0e0d31be6`
 - Destination: `bin/mate.py` → herdr/check_endpoint/launch_worker
 - ของเราเรียก installed CLI โดยตรง: exact named session/socket, pane/workspace IDs,
-  create tab --no-focus, pane run; ไม่ copy 3,344-line adapter
-- CLI facts ตรวจจาก installed Herdr 0.8.0 และ live fixture:
+  create tab/workspace --no-focus, pane run; ไม่ copy adapter
+- CLI factsตรวจจาก installed Herdr 0.8.0 และ live fixture:
   create/get คืน JSON identity receipts; pane run คืนข้อความ ไม่ใช่ JSON; --json ไม่ใช่ global flag
-- ไม่ยกมา: workspace presentation, rename/order/cleanup machinery, multi-backend routing
-- Tests: real isolated Herdr server/pane/subscription ใน `tests/live-smoke.py`
+- Mate-owned opt-in `workspace_per_task`: Treehouse ยังเป็นเจ้าของ worktree; สร้าง Herdr
+  workspace ที่ CWD นั้นและใช้ seeded tab/root pane จาก exact create receipt โดยตรง
+  เพื่อคง tab bar สำหรับ shell/server/log เพิ่มเติม; `same_tab_as` ยัง override เป็น split
+- Reference เพิ่มเติมจาก Firstmate local `a27646c`: presentation-space create/label concept
+  เท่านั้น ไม่ copy token journal, seeded-tab prune, recovery/adoption, ordering/move,
+  stale-space cleanup, version floor, multi-home lock หรือ multi-backend routing
+- Tests: unit red/green และ real isolated Herdr server/pane/subscription/Treehouse ใน
+  `tests/live-smoke.py`, รวม sibling tab ที่คง workspace และ block lease return
 
 ## R06 — Supervisor contract / briefs — REFERENCE-ONLY
 

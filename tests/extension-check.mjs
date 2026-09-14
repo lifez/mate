@@ -23,7 +23,8 @@ const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-coding-agent': join(installed, 'dist/index.js'),
   '@earendil-works/pi-tui': join(installed, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
-const { default: factory, workerProfile, dispatchProfile } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
+const { default: factory, workerProfile, dispatchProfile, dispatchInstructions } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
+const { statusPreview } = await jiti.import(join(root, '.pi/extensions/lib/calm.ts'));
 process.env.MATE_HOME = join(tmp, 'home');
 const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -115,7 +116,7 @@ try {
   assert.throws(() => workerProfile(ctx, { model: 'other/vendor/model', effort: 'high' }), /unsupported/);
   const configPath = join(tmp, 'mate.config.json');
   const configure = data => writeFileSync(configPath, JSON.stringify(data));
-  configure({ worker: { model: 'openai-codex/worker-model', effort: 'xhigh', max_active: 5 } });
+  configure({ worker: { model: 'openai-codex/worker-model', effort: 'xhigh', max_active: 5, workspace_per_task: true } });
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
   assert.deepEqual(dispatchProfile(ctx, { effort: 'low' }, configPath), { provider: 'openai-codex', model: 'worker-model', effort: 'low' });
   assert.deepEqual(dispatchProfile(ctx, { model: 'main-model', effort: 'high' }, configPath), { provider: 'openai-codex', model: 'main-model', effort: 'high' });
@@ -126,9 +127,26 @@ try {
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}), 'projects do not alter worker defaults');
   configure({});
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}));
+  const dispatch = { rules: [{ when: 'The task is broad or risky.',
+    use: { model: 'openai-codex/worker-model', effort: 'xhigh' }, why: 'Use strong reasoning.' }] };
+  configure({ worker: { model: 'openai-codex/main-model', effort: 'high' }, dispatch });
+  assert.match(dispatchInstructions(configPath), /The task is broad or risky/);
+  assert.match(dispatchInstructions(configPath), /"default":\{"model":"openai-codex\/main-model","effort":"high"\}/);
+  assert.throws(() => dispatchProfile(ctx, {}, configPath), /Dispatch rules are active/);
+  assert.deepEqual(dispatchProfile(ctx, { model: 'openai-codex/worker-model', effort: 'xhigh' }, configPath),
+    { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
+  configure({ worker: { model: 'openai-codex/main-model', effort: 'high' }, dispatch: { rules: [
+    { when: 'x', use: { model: 'missing', effort: 'low' } }] } });
+  assert.throws(() => dispatchProfile(ctx, { model: 'main-model', effort: 'high' }, configPath), /Unknown model/,
+    'an invalid unused rule must fail closed before dispatch');
   for (const invalid of [null, [], { workers: {} }, { worker: null }, { worker: [] }, { projects: null }, { projects: [] },
     { worker: { model: 1 } }, { worker: { model: ' ' } }, { worker: { effort: 'ultra' } },
-    { worker: { max_active: 0 } }, { worker: { max_active: 1.5 } }, { worker: { typo: true } }]) {
+    { worker: { max_active: 0 } }, { worker: { max_active: 1.5 } },
+    { worker: { workspace_per_task: 'yes' } }, { worker: { typo: true } },
+    { dispatch: {} }, { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [] } },
+    { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [{ when: '', use: { model: 'worker-model', effort: 'low' } }] } },
+    { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [{ when: 'x', use: [{ model: 'worker-model', effort: 'low' }] }] } },
+    { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [{ when: 'x', use: { model: 'worker-model' } }] } }]) {
     configure(invalid);
     assert.throws(() => dispatchProfile(ctx, {}, configPath), /Invalid/);
   }
@@ -140,8 +158,10 @@ try {
   assert.throws(() => dispatchProfile(ctx, {}, configPath), /Cannot read/);
   // Check the copied example config with a mock catalog; no personal config is read.
   const luna = { provider: 'openai-codex', id: 'gpt-5.6-luna', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } };
-  assert.deepEqual(dispatchProfile({ ...ctx, modelRegistry: { find: (provider, id) =>
-    provider === luna.provider && id === luna.id ? luna : undefined } }, {}),
+  const lunaCtx = { ...ctx, modelRegistry: { find: (provider, id) =>
+    provider === luna.provider && id === luna.id ? luna : undefined } };
+  assert.throws(() => dispatchProfile(lunaCtx, {}), /Dispatch rules are active/);
+  assert.deepEqual(dispatchProfile(lunaCtx, { model: 'openai-codex/gpt-5.6-luna', effort: 'xhigh' }),
     { provider: 'openai-codex', model: 'gpt-5.6-luna', effort: 'xhigh' });
   cpSync(join(sourceRoot, 'mate.config.example.json'), join(root, 'mate.config.example.json'));
   rmSync(join(root, 'mate.config.json'));
@@ -149,7 +169,7 @@ try {
   cpSync(join(root, 'mate.config.example.json'), join(root, 'mate.config.json'));
   await handlers.session_start({}, ctx);
   await wait(() => call('mate_status'));
-  const basePrompt = 'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8');
+  const basePrompt = 'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8') + '\n\n' + dispatchInstructions();
   assert.equal((await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt, basePrompt);
   assert.equal(handlers.tool_call({ toolName: 'mate_memory' }), undefined);
   const beforeStow = await call('mate_status');
@@ -184,8 +204,37 @@ try {
   assert.equal((await call('mate_memory', { revision: oldNotes.revision })).content, 'OLD_MEMORY_SENTINEL');
 
   // Calm is presentation only; existing components redraw without changing payloads.
-  const theme = { fg: (_color, text) => text };
+  const preview = statusPreview({ total_tasks: 22, open_tasks: 7, events: [], tasks: [{
+    id: 'migrate-admin-add-user-credit', state: 'review', attempt: 1, repo: '/repo', base: 'main',
+    sha: '1234567890abcdef', branch: 'mate/task', brief: 'User intent:\nMake the status readable.'
+  }] });
+  assert.match(preview, /^22 tasks · 7 open · 0 pending/m);
+  assert.match(preview, /\[REVIEW\] migrate-admin-add-user-credit · attempt 1/);
+  assert.match(preview, /brief   User intent: Make the status readable\./);
+  assert.doesNotMatch(preview, /[{}\"]/);
+  const listPreview = statusPreview({ total_tasks: 2, open_tasks: 1, events: [], tasks: [
+    { id: 'one', state: 'running', attempt: 1, base: 'main', model: 'worker' },
+    { id: 'two', state: 'complete', attempt: 2, base: 'main', model: 'worker' },
+  ] });
+  assert.equal(listPreview.split('\n').length, 3, 'task lists stay one line per task');
+  assert.match(statusPreview({ report_attempt: 2, report: { text: 'result\ncheck', more: false } }), /report · attempt 2\nresult\ncheck/);
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
   const output = data => ({ content: [{ type: 'text', text: JSON.stringify(data) }] });
+  const statusColors = [], statusBackgrounds = [];
+  const statusResult = tools.mate_status.renderResult(output({ total_tasks: 1, open_tasks: 1, tasks: [{ id: 'inspect', state: 'review', repo: '/repo', brief: 'Readable' }], events: [] }),
+    { expanded: true, isPartial: false }, {
+      fg: (color, text) => { statusColors.push(color); return text; },
+      bg: (color, text) => { statusBackgrounds.push(color); return text; },
+    }, { state: {}, isError: false });
+  const renderedStatus = statusResult.render(100).join('\n');
+  assert.match(renderedStatus, /\[REVIEW\] inspect/);
+  assert.doesNotMatch(renderedStatus, /"tasks"/, 'expanded status stays human-readable');
+  assert.deepEqual(statusColors, ['text'], 'status uses readable body contrast');
+  assert.ok(statusBackgrounds.every(color => color === 'toolSuccessBg') && statusBackgrounds.length, 'settled output supplies a contrasting background');
+  const continueResult = tools.mate_continue.renderResult(output({ id: 'inspect', state: 'launching', repo: '/repo', brief: 'Readable' }),
+    { expanded: true, isPartial: false }, theme, { state: {}, isError: false });
+  assert.match(continueResult.render(100).join('\n'), /\[LAUNCHING\] inspect/);
+  assert.doesNotMatch(continueResult.render(100).join('\n'), /"brief"/, 'task mutations use the readable task summary too');
   const row = (name, result, isError = false, isPartial = false) => {
     const context = { state: {}, isError };
     const call = tools[name].renderCall({ id: 'inspect' }, theme, context);

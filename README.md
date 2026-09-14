@@ -77,10 +77,12 @@ in the confirmation dialog. Declining creates no lease/pane/worker. Accepting
 wakes the supervisor so it can dispatch the approved task.
 
 The worker runs **native interactive pi TUI** in a dedicated Herdr pane and a
-Treehouse-leased worktree. By default Mate creates a new tab; optionally share an
-existing tab as described below. You can see Pi's tool calls, output and response as they
-happen; use Pi's normal expansion/thinking visibility controls. Mate Calm affects
-only the supervisor, not the worker UI.
+Treehouse-leased worktree. By default Mate creates a new tab; optionally enable one
+Herdr workspace per task or share an existing tab as described below. A task workspace
+keeps its normal tab bar for extra shells, servers or logs in the same worktree. You can
+see Pi's tool calls, output and response as they happen; use Pi's normal
+expansion/thinking visibility controls. Mate Calm affects only the supervisor, not the
+worker UI.
 
 A small explicit `bin/worker-events.ts` extension sends lifecycle events through a
 separate pipe, leaving stdin/stdout attached to the terminal. After Pi fully settles
@@ -146,9 +148,10 @@ Ask “Open BE in a new pane in FE's tab.” After normal base approval, Mate ca
 ```
 
 Pass this to `mate_dispatch`; use `"same_tab_as":"supervisor"` for Mate's own tab.
-Omit the field to create a new tab as before. `supervisor` is a reserved selector,
-not a task lookup. Splits open to the right without changing focus. Each new task
-still gets its own Treehouse lease, worktree, branch and Pi session; sharing a tab
+With `workspace_per_task: false`, omitting it creates a new tab as before; with the
+option enabled, omitting it creates a task workspace. `supervisor` is a reserved
+selector, not a task lookup. Splits open to the right without changing focus. Each new
+task still gets its own Treehouse lease, worktree, branch and Pi session; sharing a tab
 is only terminal layout, not shared code state or permission to broaden scope.
 
 Mate pins the target's session/socket/workspace/tab/pane/original terminal before
@@ -252,10 +255,11 @@ Repeating the command preserves the original record. It is a human command, not
 a model tool; no model call is needed to accept a task.
 
 Completion itself does not acknowledge pending events, push/merge, return the
-Treehouse lease or delete reports. Separate confirmations then offer to close a
-dedicated worker Herdr tab and return the exact Treehouse lease. Declining either
-keeps that resource; running `/mate-complete ID` again offers it again without
-rewriting acceptance.
+Treehouse lease or delete reports. Separate confirmations then offer to close the exact
+worker Herdr tab and return the exact Treehouse lease. Closing the only tab also removes
+a task workspace; sibling tabs keep it open. Those tabs must stop using the worktree
+before lease return can pass. Declining either confirmation keeps that resource;
+running `/mate-complete ID` again offers it again without rewriting acceptance.
 
 Closure checks the worker lock, exact session/socket/workspace/tab/pane and original
 terminal identity, a single-pane tab, and shell-only foreground process information.
@@ -351,7 +355,8 @@ Edit `mate.config.json` in the Mate repository (not the worker's repository):
   "worker": {
     "model": "openai-codex/gpt-5.6-luna",
     "effort": "xhigh",
-    "max_active": 2
+    "max_active": 2,
+    "workspace_per_task": false
   }
 }
 ```
@@ -359,8 +364,20 @@ Edit `mate.config.json` in the Mate repository (not the worker's repository):
 New dispatches read this file each time; no restart is needed after config edits.
 `worker.max_active` is a positive integer, defaults to `2`, and gates both new
 workers and continuations against the current active fleet. Raising it does not
-increase Treehouse pool capacity or model-provider quota.
-Precedence per model/effort field is **task override → worker config → supervisor setting**.
+increase Treehouse pool capacity or model-provider quota. Set
+`worker.workspace_per_task` to `true` to create a `└ <task-id>` workspace rooted at
+its leased worktree instead of adding another supervisor tab. This visual projection
+works across repositories and retains Herdr tabs inside the task workspace; it is not
+a native Git-worktree group. `same_tab_as` remains the explicit per-task override.
+Optional natural-language `dispatch.rules` live in this same file—Mate does not create
+or read a separate `crew-dispatch.json`. The supervisor chooses the best semantic match
+and records its concrete model/effort in the brief before approval; an unmatched task
+uses the `worker` profile. When rules are active, initial dispatch requires both selected
+fields so consultation cannot be silently skipped. Human-requested settings take
+precedence. Profile arrays, harness switching and quota balancing are not supported;
+Mate always launches Pi. See [CONFIGURATION.md](CONFIGURATION.md#dispatch-rules).
+
+Precedence per model/effort field is **human override → matching dispatch rule → worker config → supervisor setting**.
 Use `provider/model-id` to keep the default independent of the supervisor's provider.
 A bare ID uses the supervisor's provider. Use `{}` to inherit both supervisor settings.
 Missing/unreadable/invalid config fails dispatch instead of silently falling back.

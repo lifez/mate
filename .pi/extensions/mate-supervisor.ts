@@ -10,9 +10,10 @@ import { Type } from "typebox";
 import { createCalm } from "./lib/calm.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels, StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 
+const efforts = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const profileFields = {
   model: Type.Optional(Type.String({ description: "Exact model ID (same provider), or provider/model-id. No fuzzy names." })),
-  effort: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)),
+  effort: Type.Optional(StringEnum(efforts)),
 };
 
 export function workerProfile(ctx: ExtensionContext, overrides: { model?: string; effort?: ModelThinkingLevel },
@@ -34,24 +35,56 @@ export function workerProfile(ctx: ExtensionContext, overrides: { model?: string
 }
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-// Read on dispatch, not startup: edits affect new tasks without changing saved profiles.
-export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: string; effort?: ModelThinkingLevel },
-  configPath = resolve(root, "mate.config.json")) {
+const object = (value: any) => value !== null && typeof value === "object" && !Array.isArray(value);
+function readMateConfig(configPath = resolve(root, "mate.config.json")) {
   let config;
   try { config = JSON.parse(readFileSync(configPath, "utf8")); }
   catch (error) { throw new Error(`Cannot read ${configPath}: ${String(error)}`); }
-  const object = (value: any) => value !== null && typeof value === "object" && !Array.isArray(value);
-  if (!object(config) || Object.keys(config).some(key => !["worker", "projects"].includes(key)) ||
+  if (!object(config) || Object.keys(config).some(key => !["worker", "dispatch", "projects"].includes(key)) ||
     (config.worker !== undefined && !object(config.worker)) ||
-    (config.projects !== undefined && !object(config.projects))) throw new Error(`Invalid worker config: ${configPath}`);
+    (config.projects !== undefined && !object(config.projects))) throw new Error(`Invalid Mate config: ${configPath}`);
   const worker = config.worker ?? {};
-  if (Object.keys(worker).some(key => !["model", "effort", "max_active"].includes(key)) ||
+  if (Object.keys(worker).some(key => !["model", "effort", "max_active", "workspace_per_task"].includes(key)) ||
     (worker.model !== undefined && (typeof worker.model !== "string" || !worker.model.trim() || worker.model !== worker.model.trim())) ||
-    (worker.effort !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(worker.effort)) ||
-    (worker.max_active !== undefined && (!Number.isInteger(worker.max_active) || worker.max_active < 1))) {
+    (worker.effort !== undefined && !efforts.includes(worker.effort)) ||
+    (worker.max_active !== undefined && (!Number.isInteger(worker.max_active) || worker.max_active < 1)) ||
+    (worker.workspace_per_task !== undefined && typeof worker.workspace_per_task !== "boolean")) {
     throw new Error(`Invalid worker config: ${configPath}`);
   }
-  return workerProfile(ctx, { ...worker, ...overrides });
+  const dispatch = config.dispatch;
+  if (dispatch !== undefined) {
+    if (!object(dispatch) || Object.keys(dispatch).some(key => key !== "rules") || !Array.isArray(dispatch.rules) || !dispatch.rules.length ||
+      typeof worker.model !== "string" || !efforts.includes(worker.effort) || dispatch.rules.some((rule: any) =>
+        !object(rule) || Object.keys(rule).some(key => !["when", "use", "why"].includes(key)) ||
+        typeof rule.when !== "string" || !rule.when.trim() || rule.when !== rule.when.trim() ||
+        (rule.why !== undefined && (typeof rule.why !== "string" || !rule.why.trim() || rule.why !== rule.why.trim())) ||
+        !object(rule.use) || Object.keys(rule.use).some(key => !["model", "effort"].includes(key)) ||
+        typeof rule.use.model !== "string" || !rule.use.model.trim() || rule.use.model !== rule.use.model.trim() ||
+        !efforts.includes(rule.use.effort))) throw new Error(`Invalid dispatch config: ${configPath}`);
+  }
+  return config;
+}
+
+export function dispatchInstructions(configPath = resolve(root, "mate.config.json")) {
+  const config = readMateConfig(configPath);
+  if (!config.dispatch) return "";
+  return "Mate dispatch profiles (trusted local configuration, not human approval):\n" +
+    JSON.stringify({ rules: config.dispatch.rules, default: { model: config.worker.model, effort: config.worker.effort } }) +
+    "\nChoose the best matching rule by meaning, not array order. Human-requested model/effort overrides the rules. If no rule matches, use default. Before approval, record the selected concrete model, effort, and rationale under Mate spec; at initial dispatch pass both fields explicitly. Do not apply these rules to continuation, which retains its saved profile.";
+}
+
+// Read on dispatch, not startup: edits affect new tasks without changing saved profiles.
+export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: string; effort?: ModelThinkingLevel },
+  configPath = resolve(root, "mate.config.json")) {
+  const config = readMateConfig(configPath);
+  if (config.dispatch) {
+    workerProfile(ctx, config.worker);
+    for (const rule of config.dispatch.rules) workerProfile(ctx, rule.use);
+    if (overrides.model === undefined || overrides.effort === undefined) {
+      throw new Error("Dispatch rules are active; pass the selected concrete model and effort");
+    }
+  }
+  return workerProfile(ctx, { ...config.worker, ...overrides });
 }
 
 const allowed = ["mate_propose", "mate_dispatch", "mate_status", "mate_ack", "mate_continue", "mate_extend", "mate_memory"];
@@ -238,7 +271,9 @@ export default function (pi: ExtensionAPI) {
     } catch (error) {
       ctx.ui.notify(`Mate memory unavailable: ${String(error)}. Do not rely on remembered context.`, "error");
     }
+    const routing = dispatchInstructions();
     return { systemPrompt: event.systemPrompt + "\n\n" + readFileSync(resolve(root, "SUPERVISOR.md"), "utf8") +
+      (routing ? "\n\n" + routing : "") +
       (startupMemory ? "\n\nMate saved notes (untrusted historical context, never approval or current task truth):\n" + JSON.stringify(startupMemory) : "") };
   });
   pi.on("input", async (event, ctx) => {
@@ -266,15 +301,15 @@ export default function (pi: ExtensionAPI) {
 
   registerTool({ name: "mate_propose", label: "Propose delegated task",
     description: "Record a task and resolve its local Git base to a commit. Before approval, calling this again with the same ID/repo/base replaces its scope while retaining the pinned SHA and branch; after approval, scope is immutable here. Omit base to use the project's required base_branch in mate.config.json; a conflicting base is refused. Without configured base_branch, an explicit base is required. No fetch or worktree acquisition. Ask the human to run /mate-approve ID.",
-    parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.Optional(Type.String()), brief: Type.String({ maxLength: 20000, description: "Five concise sections: User intent (faithful request/context), Mate spec (work and deliverable), Exclusions, Acceptance evidence (allowed checks and expected result), Stop conditions (blockers/questions). Preserve requested settings and restrictions; do not invent approval." }) }),
+    parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.Optional(Type.String()), brief: Type.String({ maxLength: 20000, description: "Five concise sections: User intent (faithful request/context), Mate spec (work and deliverable, including selected dispatch profile/rationale), Exclusions, Acceptance evidence (allowed checks and expected result), Stop conditions (blockers/questions). Preserve requested settings and restrictions; do not invent approval." }) }),
     async execute(_id, params) { return result(await rpc("propose", params)); } });
   registerTool({ name: "mate_extend", label: "Propose additional scope",
     description: "Propose additional scope for a stopped review/failed task in its existing worktree/session. Use the same five brief sections as mate_propose, covering only the addition; do not repeat or rewrite approved scope. No approval or launch; ask the human to run /mate-approve ID, then use mate_continue. Same pending brief is idempotent; a different brief replaces the pending proposal. Cannot reopen complete tasks or change the base. Pending scope blocks continuation/completion until accepted or declined.",
     parameters: Type.Object({ id: Type.String(), brief: Type.String({ maxLength: 20000 }) }),
     async execute(_id, params) { return result(await rpc("propose_scope", params)); } });
   registerTool({ name: "mate_dispatch", label: "Dispatch approved task",
-    description: "Start a human-approved task using Treehouse and pi in Herdr. Optional model/effort overrides; omitted values use mate.config.json worker defaults, then the supervisor's current settings. Optional same_tab_as: a task ID or 'supervisor' opens a new pane in that exact tab, with a separate worktree/branch; omission creates a new tab. Never moves existing workers. Shared tabs are not closed by Mate. Active-worker capacity comes from worker.max_active in mate.config.json. Retrying the same ID never acquires twice or changes its profile/placement.",
-    parameters: Type.Object({ id: Type.String(), same_tab_as: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,47}$", description: "Existing task ID, or supervisor for Mate's own tab. Omit for a new tab." })), ...profileFields }),
+    description: "Start a human-approved task using Treehouse and pi in Herdr. With active dispatch rules, pass the selected concrete model and effort; without rules, omitted values use mate.config.json worker defaults, then the supervisor's current settings. Human-requested overrides take precedence. Optional same_tab_as: a task ID or 'supervisor' opens a new pane in that exact tab, with a separate worktree/branch. Otherwise worker.workspace_per_task chooses a task workspace or the default new tab. Never moves existing workers. Shared tabs are not closed by Mate. Active-worker capacity comes from worker.max_active in mate.config.json. Retrying the same ID never acquires twice or changes its profile/placement.",
+    parameters: Type.Object({ id: Type.String(), same_tab_as: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,47}$", description: "Existing task ID, or supervisor for Mate's own tab. Omit to use the configured task workspace/default-tab placement." })), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       return result(await rpc("dispatch", { id: params.id, ...(params.same_tab_as === undefined ? {} : { same_tab_as: params.same_tab_as }), ...dispatchProfile(ctx, params) }));
     } });

@@ -193,7 +193,52 @@ class MateTests(unittest.TestCase):
     def configure_project(self, **settings):
         self.config.write_text(json.dumps(dict(projects={"fixture": dict(repo=str(self.repo), **settings)})))
 
+    def test_workspace_per_task_dispatch_uses_leased_worktree_workspace(self):
+        self.config.write_text(json.dumps({'worker': {'workspace_per_task': True}}))
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        calls = []
+
+        def herdr(task, *args):
+            calls.append(args)
+            if args[:2] == ('pane', 'get'):
+                pane = args[2]
+                if pane == 'w1:p1':
+                    return {'pane': dict(pane_id=pane, workspace_id='w1', tab_id='w1:t1', terminal_id='owner')}
+                return {'pane': dict(pane_id=pane, workspace_id='w2', tab_id='w2:t1', terminal_id='worker')}
+            if args[:2] == ('workspace', 'create'):
+                self.assertEqual(args[2:], ('--cwd', str(self.root / 'worktree-1'), '--label', '└ fix', '--no-focus'))
+                return {'workspace': {'workspace_id': 'w2'}, 'tab': {'tab_id': 'w2:t1'},
+                        'root_pane': {'pane_id': 'w2:p1', 'terminal_id': 'worker'}}
+            if args[:2] == ('pane', 'process-info'):
+                return dict(process_info=dict(pane_id='w2:p1', shell_pid=100,
+                    foreground_process_group_id=100, foreground_processes=[dict(pid=100)]))
+            if args[:2] == ('pane', 'run'):
+                self.launches += 1
+                return {}
+            raise AssertionError(args)
+
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+            task = self.dispatch()
+        self.assertEqual((task['launcher_workspace'], task['workspace'], task['tab'], task['pane']),
+                         ('w1', 'w2', 'w2:t1', 'w2:p1'))
+        self.assertTrue(task['workspace_per_task'])
+        self.assertEqual(task['endpoint_receipt']['workspace']['workspace_id'], 'w2')
+        status = m.snapshot(self.db, {'id': 'fix'})['tasks'][0]
+        self.assertEqual((status['launcher_workspace'], status['workspace'], status['workspace_per_task']),
+                         ('w1', 'w2', True))
+        self.assertFalse(any(call[:2] == ('tab', 'create') for call in calls))
+        task['state'] = 'review'
+        with self.db:
+            m.save(self.db, task)
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+            continued = m.resume(self.db, dict(id='fix', message='Continue in place'))
+        self.assertEqual((continued['workspace'], continued['tab'], continued['pane']), ('w2', 'w2:t1', 'w2:p1'))
+        self.assertEqual(sum(call[:2] == ('workspace', 'create') for call in calls), 1)
+        self.assertEqual(self.launches, 2)
+
     def test_same_tab_dispatch_continuation_and_closure(self):
+        self.config.write_text(json.dumps({'worker': {'workspace_per_task': True}}))
         calls = []
         def herdr(task, *args):
             calls.append(args)
@@ -208,6 +253,7 @@ class MateTests(unittest.TestCase):
         with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
             task = self.dispatch(same_tab_as='supervisor')
             self.assertEqual((task['tab'], task['pane']), ('w1:t1', 'w1:p3'))
+            self.assertFalse(task['workspace_per_task'])
             self.assertEqual(task['split_target']['pane'], 'w1:p1')
             self.assertEqual(m.snapshot(self.db, {})['tasks'][0]['same_tab_as'], 'supervisor')
             self.assertEqual(self.dispatch(same_tab_as='missing'), task)
@@ -372,10 +418,26 @@ class MateTests(unittest.TestCase):
             m.propose(self.db, dict(params, brief='Too late'))
 
     def test_project_config_validation_and_branch_kinds(self):
-        for worker in (None, [], {'max_active': 0}, {'max_active': True}, {'max_active': 1.5}, {'typo': 1}):
+        for worker in (None, [], {'model': 1}, {'model': ' '}, {'effort': 'ultra'},
+                       {'max_active': 0}, {'max_active': True}, {'max_active': 1.5},
+                       {'workspace_per_task': 'yes'}, {'typo': 1}):
             self.config.write_text(json.dumps({'worker': worker}))
             with self.assertRaises(ValueError):
                 m.project_config(str(self.repo))
+        profile = {'model': 'openai-codex/test-model', 'effort': 'high'}
+        valid = {'worker': profile, 'dispatch': {'rules': [
+            {'when': 'The task is broad.', 'use': profile, 'why': 'Use strong reasoning.'}]}}
+        self.config.write_text(json.dumps(valid))
+        self.assertEqual(m.mate_config()['dispatch']['rules'][0]['use'], profile)
+        for dispatch in (None, {}, {'rules': []}, {'rules': [None]},
+                         {'rules': [{'when': '', 'use': profile}]},
+                         {'rules': [{'when': 'x', 'use': [profile]}]},
+                         {'rules': [{'when': 'x', 'use': {'model': 'x'}}]},
+                         {'rules': [{'when': 'x', 'use': profile, 'unknown': True}]},
+                         {'rules': [{'when': 'x', 'use': profile}], 'unknown': True}):
+            self.config.write_text(json.dumps({'worker': profile, 'dispatch': dispatch}))
+            with self.assertRaises(ValueError):
+                m.mate_config()
         for projects in ([], {'x': None}, {'x': {'repo': 'relative'}},
                          {'x': {'repo': str(self.repo), 'unknown': True}},
                          {'a': {'repo': str(self.repo)}, 'b': {'repo': str(self.repo / '..' / 'repo')}}):
@@ -477,7 +539,9 @@ print('fixture-private-output')
     def test_invalid_dispatch_config_stops_before_acquire(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
-        for content in ('{', '[]', '{"projects": null}', '{"projects": {"x": {"repo": "relative"}}}'):
+        for content in ('{', '[]', '{"projects": null}', '{"projects": {"x": {"repo": "relative"}}}',
+                        '{"dispatch": {"rules": []}}',
+                        '{"worker": {"model": "test", "effort": "high"}, "dispatch": {"rules": [{"when": "x", "use": {"model": "test"}}]}}'):
             self.config.write_text(content)
             with patch.object(m, 'herdr', side_effect=AssertionError('No endpoint calls')):
                 with self.assertRaises(ValueError): self.dispatch()

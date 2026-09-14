@@ -160,14 +160,44 @@ def check_lease(task):
 
 def mate_config():
     config = json.loads(CONFIG.read_text())
-    if not isinstance(config, dict) or set(config) - {"worker", "projects"}:
+    if not isinstance(config, dict) or set(config) - {"worker", "dispatch", "projects"}:
         raise ValueError("Invalid Mate config")
     worker = config.get("worker", {})
-    if not isinstance(worker, dict) or set(worker) - {"model", "effort", "max_active"}:
+    efforts = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+    if not isinstance(worker, dict) or set(worker) - {"model", "effort", "max_active", "workspace_per_task"}:
         raise ValueError("Invalid worker config")
+    if "model" in worker and (not isinstance(worker["model"], str) or not worker["model"].strip() or worker["model"] != worker["model"].strip()):
+        raise ValueError("Invalid worker.model")
+    if "effort" in worker and (not isinstance(worker["effort"], str) or worker["effort"] not in efforts):
+        raise ValueError("Invalid worker.effort")
     limit = worker.get("max_active", 2)
     if type(limit) is not int or limit < 1:
         raise ValueError("worker.max_active must be a positive integer")
+    if type(worker.get("workspace_per_task", False)) is not bool:
+        raise ValueError("worker.workspace_per_task must be a boolean")
+    dispatch = config.get("dispatch")
+    if "dispatch" in config:
+        if (not isinstance(dispatch, dict) or set(dispatch) - {"rules"}
+                or not isinstance(dispatch.get("rules"), list) or not dispatch["rules"]
+                or "model" not in worker or "effort" not in worker):
+            raise ValueError("Invalid dispatch config")
+        for rule in dispatch["rules"]:
+            if not isinstance(rule, dict) or set(rule) - {"when", "use", "why"}:
+                raise ValueError("Invalid dispatch rule")
+            text(rule.get("when"), "dispatch rule when", 4000)
+            if rule["when"] != rule["when"].strip():
+                raise ValueError("Invalid dispatch rule when")
+            if "why" in rule:
+                text(rule["why"], "dispatch rule why", 4000)
+                if rule["why"] != rule["why"].strip():
+                    raise ValueError("Invalid dispatch rule why")
+            use = rule.get("use")
+            if not isinstance(use, dict) or set(use) != {"model", "effort"}:
+                raise ValueError("Invalid dispatch profile")
+            text(use["model"], "dispatch profile model", 1000)
+            if (use["model"] != use["model"].strip() or not isinstance(use["effort"], str)
+                    or use["effort"] not in efforts):
+                raise ValueError("Invalid dispatch profile")
     return config
 
 
@@ -400,6 +430,10 @@ def dispatch(db, p):
         raise ValueError("Missing exact Herdr caller identity")
     task.update(session=session, socket=socket_path, workspace=workspace)
     caller = check_endpoint(task, parent)  # Before acquiring anything.
+    if not task.get("recoveries"):
+        task.update(launcher_workspace=workspace,
+                    workspace_per_task=(mate_config().get("worker", {}).get("workspace_per_task", False)
+                                        and "same_tab_as" not in p))
     if not task.get("recoveries") and "same_tab_as" in p:
         reference = task_id(p["same_tab_as"])
         if reference != "supervisor" and reference == task["id"]:
@@ -457,6 +491,10 @@ def dispatch(db, p):
         if task.get("same_tab_as"):
             target = check_split_target(task)  # Recheck after acquisition/startup; never fall back.
             created = herdr(task, "pane", "split", target["pane"], "--direction", "right", "--cwd", wt, "--no-focus")
+        elif task.get("workspace_per_task"):
+            created = herdr(task, "workspace", "create", "--cwd", wt,
+                            "--label", "└ " + task["id"], "--no-focus")
+            task["workspace"] = created["workspace"]["workspace_id"]
         else:
             created = herdr(task, "tab", "create", "--workspace", workspace, "--cwd", wt,
                             "--label", "mate-" + task["id"], "--no-focus")
@@ -1203,10 +1241,11 @@ def snapshot(db, p):
             return result
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
     else:
         fields = ("id", "state", "updated", "repo", "base", "base_branch", "sha", "branch", "brief",
-                  "attempt", "approved_at", "provider", "model", "effort", "worktree", "pane", "tab",
+                  "attempt", "approved_at", "provider", "model", "effort", "worktree",
+                  "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab",
                   "same_tab_as", "error", "missing_from", "launch_stage", "pending_scope",
                   "startup", "startup_state", "startup_started_at", "startup_finished_at", "startup_pid", "startup_exit_code",
                   "completed_at", "completed_by", "completed_via", "completed_from",

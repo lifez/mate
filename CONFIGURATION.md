@@ -45,7 +45,8 @@ example as above. Git history is unchanged; untracking does not erase older comm
   "worker": {
     "model": "openai-codex/gpt-5.6-luna",
     "effort": "xhigh",
-    "max_active": 2
+    "max_active": 2,
+    "workspace_per_task": false
   },
   "projects": {}
 }
@@ -60,11 +61,56 @@ example as above. Git history is unchanged; untracking does not erase older comm
 - `max_active`: positive integer limiting concurrent acquiring, launching and running
   workers. Defaults to `2`. It applies to new dispatches and continuations as soon as
   the file is saved; it does not resize the Treehouse pool or provider quota.
-- Initial dispatch precedence per model/effort field: **task override → worker config → supervisor**.
-- Continuation keeps the task's saved profile unless explicitly overridden. Config
-  edits do not change the supervisor model or existing task profiles.
+- `workspace_per_task`: boolean, default `false`. When `true`, a new task without
+  `same_tab_as` opens a `└ <task-id>` Herdr workspace rooted at its Treehouse worktree
+  instead of adding a tab to the supervisor workspace. The workspace keeps Herdr's tab
+  bar for extra shells, servers, or logs. Mate owns only its exact worker tab; extra
+  tabs keep the workspace open and prevent lease return while they use the worktree.
+  This is visual grouping, not a native Herdr Git-worktree relationship.
+- Initial dispatch precedence per model/effort field: **human override → matching dispatch rule → worker config → supervisor**.
+- Continuation keeps the task's saved profile unless explicitly overridden. Dispatch
+  rules apply only to initial runs; config edits do not change existing task profiles.
 
 Use Pi authentication (`/login`); never put API keys in this file.
+
+## Dispatch rules
+
+Put optional natural-language routing rules in this same `mate.config.json`; Mate does
+not use a separate `crew-dispatch.json`:
+
+```json
+{
+  "worker": {
+    "model": "openai-codex/gpt-5.6-luna",
+    "effort": "xhigh"
+  },
+  "dispatch": {
+    "rules": [
+      {
+        "when": "The task is a trivial mechanical edit with little ambiguity.",
+        "use": {
+          "model": "openai-codex/gpt-5.6-luna",
+          "effort": "low"
+        },
+        "why": "Use a faster profile for narrow work."
+      }
+    ]
+  }
+}
+```
+
+The supervisor compares the task with every `when` and chooses the best semantic
+match; array order is not priority. `why` is optional explanatory text. Each `use`
+must contain one concrete Pi `model` and supported `effort`. Profile arrays, harness
+switching and quota balancing are intentionally unsupported: Mate always launches Pi.
+
+When rules are active, `worker.model` and `worker.effort` are the concrete default for
+an unmatched task, and initial `mate_dispatch` must pass both selected values. This
+backstop prevents silently skipping rule consultation. The selected profile and reason
+are recorded in the proposed brief before human approval. Explicit human settings win.
+Invalid routing fails closed before Treehouse acquisition; it never falls back around a
+bad rule. Rules are reread on each model turn and dispatch, so editing them needs no
+restart, but already-approved briefs and launched tasks retain their recorded choice.
 
 ## Project settings
 
@@ -157,7 +203,7 @@ Never commit the env source/destination, credentials or startup logs.
 ## When edits take effect
 
 - Required branch policy: new proposals, checked again before initial dispatch.
-- Worker defaults and startup: initial dispatch reads current config.
+- Worker defaults, dispatch rules, workspace placement and startup: initial dispatch reads current config.
 - Active-worker limit: every dispatch/continuation reads current config.
 - Continuation: saved worktree/base/profile; no startup replay.
 - Config-only edits: no supervisor restart needed.

@@ -166,6 +166,32 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R06"],
+      "description": "Mate-owned natural-language dispatch profiles in the existing mate.config.json: dispatch.rules maps task descriptions to concrete Pi model/effort profiles, with human override then best semantic rule then worker default precedence. Active rules require explicit initial-dispatch model and effort; Python and TypeScript validation fail closed. No separate crew-dispatch file, profile arrays, quota balancing, harness switching or upstream shell parser copied.",
+      "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
+      "reviewed_scope": "Firstmate crew-dispatch example, natural-language model-owned matching, schema validation and explicit spawn-axis backstop only; reference-only and no full component audit.",
+      "sources": [
+        { "path": "docs/examples/crew-dispatch.json", "blob": "b404e95e777c8197962f58f9e536396edbcc5434", "mode": "reference-only" },
+        { "path": "bin/fm-bootstrap.sh", "blob": "b5e010905cf3a4ca4be69490f1075459bc4945b3", "mode": "reference-only" },
+        { "path": "docs/architecture.md", "blob": "7ab4e496f7d7c167d1b0070c944a429e3e86f60f", "mode": "reference-only" }
+      ],
+      "paths": ["mate.config.json", "mate.config.example.json", ".pi/extensions/mate-supervisor.ts", "bin/mate.py", "SUPERVISOR.md", "CONFIGURATION.md", "README.md", "tests/extension-check.mjs", "tests/test_mate.py"],
+      "local_commit": null
+    },
+    {
+      "component_ids": ["R04", "R05"],
+      "description": "Mate-owned opt-in workspace_per_task presentation: Treehouse still owns each isolated worktree; Mate creates one Herdr workspace rooted at that path and uses the exact seeded tab/root-pane receipt for the worker. Herdr tabs remain available inside it, sibling tabs keep the workspace open and block lease return while using the worktree, and same_tab_as remains the explicit split override. Existing tasks/default tab placement remain compatible. No Firstmate token journal, seeded-tab prune, recovery/adoption, ordering/move, stale-space cleanup, version floor or multi-home machinery copied.",
+      "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
+      "reviewed_scope": "Firstmate Herdr presentation-space create/label and real-E2E behavior only, reference-only; Mate uses its existing SQLite exact endpoint and fail-closed lifecycle.",
+      "sources": [
+        { "path": "bin/backends/herdr.sh", "blob": "41254e26d0fc85096ce65fb8f9b3af99ab038ec7", "mode": "reference-only" },
+        { "path": "docs/herdr-backend.md", "blob": "97523457071c3769a2cd7c6ba90e91ba8c3b0903", "mode": "reference-only" },
+        { "path": "tests/fm-backend-herdr-presentation-e2e.test.sh", "blob": "4aef0afc3496f2ac65639aa2c39bcf0f2a3d6fe9", "mode": "reference-only" }
+      ],
+      "paths": ["bin/mate.py", "tests/test_mate.py", "tests/live-smoke.py", "README.md", "CONFIGURATION.md", "mate.config.example.json"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned compact current status, opt-in full journal history and attempt-pinned report-only continuation pages; no audit deletion or schema change. Human approval/completion retain full internal reads and existing safety gates. Five-section brief authoring contract separates user intent from Mate spec, exclusions, acceptance evidence and stop conditions in the existing brief string; legacy briefs and human restrictions remain intact. No upstream code copied or delivery authority imported; semantic compliance is instructional.",
       "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",

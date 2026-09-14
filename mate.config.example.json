@@ -2,7 +2,28 @@
   "worker": {
     "model": "openai-codex/gpt-5.6-luna",
     "effort": "xhigh",
-    "max_active": 2
+    "max_active": 2,
+    "workspace_per_task": false
+  },
+  "dispatch": {
+    "rules": [
+      {
+        "when": "The task is a trivial mechanical edit with little ambiguity.",
+        "use": {
+          "model": "openai-codex/gpt-5.6-luna",
+          "effort": "low"
+        },
+        "why": "Use a faster profile for narrow work."
+      },
+      {
+        "when": "The task is broad, ambiguous, architectural, or a risky multi-file change.",
+        "use": {
+          "model": "openai-codex/gpt-5.6-luna",
+          "effort": "xhigh"
+        },
+        "why": "Use the strongest configured reasoning profile for risky work."
+      }
+    ]
   },
   "projects": {}
 }
