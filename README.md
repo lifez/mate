@@ -125,6 +125,18 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
 - `/stow` — curate and save private memory/open next steps before a session reset (uses the current model; no automatic reset).
+- `/bearings lavish` — rebuild and open the private read-only Lavish fleet board from current Mate state.
+
+`/bearings lavish` uses the same bounded local status snapshot as `/mate-status` and
+writes `MATE_HOME/.lavish/bearings-board.html` atomically with private permissions.
+Its four sections are Captain's Call, Recently Landed, Underway and Charted Next.
+Board buttons only copy the appropriate Mate command; they never execute, approve,
+acknowledge, dispatch, complete, cancel or alter a repository. Paste copied commands
+back into the Mate TUI, where the existing human dialogs and runtime checks still
+apply. The Lavish session is opened for visual inspection only: Mate does not claim
+to monitor annotations or queued Lavish feedback. Re-running the command refreshes
+the stable board path from current SQLite state. Only the latest 50 status rows and
+50 pending events are shown, with the retained total disclosed on the board.
 
 The supervisor gets only `mate_propose`, `mate_dispatch`, `mate_status`,
 `mate_continue`, `mate_extend`, `mate_ack`, `mate_memory`. The Mate extension selects this tool allowlist and
@@ -734,6 +746,7 @@ Default: `mate/data/` (gitignored, private permissions). Override with an absolu
 data/mate.sqlite3                  task journal + events + handling notes + memory revisions
 data/supervisor.lock               kernel-held ownership lock
 data/calm                          persistent Calm presentation preference
+data/.lavish/bearings-board.html   private read-only fleet board (rebuilt in place)
 data/<id>/session.jsonl            worker pi session (reused on continuation)
 data/<id>/events-<attempt>.jsonl    selected Pi lifecycle/message/tool events
 data/<id>/stderr-<attempt>.log      provider/CLI errors
@@ -770,8 +783,9 @@ with workers stopped before changing schema; there is no schema migration system
 ## Checks
 
 Requires macOS/Linux, Python 3.10+, Git, pi, Herdr and Treehouse supporting
-`get --lease --json` / `status --json`. Tested tool versions: pi 0.85.1, Herdr 0.8.0,
-Treehouse 2.1.1. No extra runtime package installation is needed.
+`get --lease --json` / `status --json`. `/bearings lavish` additionally requires the
+`lavish-axi` executable on `PATH`. Tested tool versions: pi 0.85.1, Herdr 0.8.0,
+Treehouse 2.1.1. The board has no remote script, stylesheet or font dependency.
 
 ```sh
 python3 -m unittest discover -s tests -v

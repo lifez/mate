@@ -25,7 +25,12 @@ const jiti = createJiti(import.meta.url, { alias: {
 } });
 const { default: factory, workerProfile, dispatchProfile, dispatchInstructions } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
 const { statusPreview } = await jiti.import(join(root, '.pi/extensions/lib/calm.ts'));
+const { renderBearingsBoard } = await jiti.import(join(root, '.pi/extensions/lib/bearings.ts'));
 process.env.MATE_HOME = join(tmp, 'home');
+const originalPath = process.env.PATH;
+const fakebin = join(tmp, 'fakebin'); mkdirSync(fakebin);
+writeFileSync(join(fakebin, 'lavish-axi'), '#!/bin/sh\nprintf "session:\\n  url: http://127.0.0.1:4321/session/fixture\\n  status: opened\\n"\n', { mode: 0o755 });
+process.env.PATH = `${fakebin}:${originalPath}`;
 const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 git('init', '-b', 'main'); git('-c', 'user.name=Mate Test', '-c', 'user.email=mate@test.invalid', 'commit', '--allow-empty', '-m', 'base');
@@ -76,6 +81,17 @@ async function wait(check) {
 }
 const call = async (name, params = {}) => JSON.parse((await tools[name].execute('test', params)).content[0].text);
 try {
+  const board = renderBearingsBoard({ total_tasks: 5, tasks: [
+    { id: 'needs-approval', state: 'awaiting-base', project: 'mate', attempt: 0, sha: '1234567890abcdef', usage_total: {} },
+    { id: 'shipping', state: 'running', project: 'mate', attempt: 1, error: '</script><script>bad()</script>', usage_total: {} },
+    { id: 'done', state: 'complete', project: 'mate', attempt: 1, usage_total: {} },
+    { id: 'next', state: 'approved', project: 'mate', attempt: 0, usage_total: {} },
+  ], events: [{ task: 'shipping', kind: 'report', note: 'Ready' }] });
+  for (const heading of ['Captain’s Call', 'Recently Landed', 'Underway', 'Charted Next']) assert.match(board, new RegExp(heading));
+  assert.match(board, /Copy \/mate-approve needs-approval/);
+  assert.doesNotMatch(board, /<script>bad\(\)<\/script>/, 'task content cannot escape into markup');
+  assert.match(board, /Read-only board/);
+
   const { default: bridge } = await jiti.import(join(root, 'bin/worker-events.ts'));
   const bridgeHandlers = {}, bridgeFile = join(tmp, 'bridge.jsonl');
   const fd = openSync(bridgeFile, 'w', 0o600);
@@ -169,6 +185,15 @@ try {
   cpSync(join(root, 'mate.config.example.json'), join(root, 'mate.config.json'));
   await handlers.session_start({}, ctx);
   await wait(() => call('mate_status'));
+  await commands.bearings.handler('', ctx);
+  assert.match(notices.at(-1)[0], /Usage: \/bearings lavish/);
+  await commands.bearings.handler('lavish', ctx);
+  const boardPath = join(process.env.MATE_HOME, '.lavish', 'bearings-board.html');
+  assert.equal(existsSync(boardPath), true);
+  assert.equal(statSync(boardPath).mode & 0o777, 0o600);
+  assert.match(readFileSync(boardPath, 'utf8'), /Nothing needs your action right now/);
+  assert.match(notices.at(-1)[0], /http:\/\/127\.0\.0\.1:4321\/session\/fixture/);
+  assert.match(notices.at(-1)[0], /Read-only/);
   const basePrompt = 'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8') + '\n\n' + dispatchInstructions();
   assert.equal((await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt, basePrompt);
   assert.equal(handlers.tool_call({ toolName: 'mate_memory' }), undefined);
@@ -612,10 +637,11 @@ try {
   assert.equal(messages.length, stopped, 'stow refuses after ownership shutdown');
   await sleep(2100);
   assert.equal(messages.length, stopped, 'shutdown does not re-arm');
-  console.log('PASS: stow command/refusals, memory save/history/conflicts/session reload/stable prefix, dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
+  console.log('PASS: Bearings read-only board/command, stow command/refusals, memory save/history/conflicts/session reload/stable prefix, dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
 } finally {
   await handlers.session_shutdown();
   rmSync(tmp, { recursive: true, force: true });
   if (previousMode === undefined) delete process.env.MATE_MODE;
   else process.env.MATE_MODE = previousMode;
+  process.env.PATH = originalPath;
 }

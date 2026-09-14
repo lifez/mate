@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createCalm } from "./lib/calm.ts";
+import { openBearingsBoard, writeBearingsBoard } from "./lib/bearings.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels, StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 const efforts = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -350,6 +351,19 @@ Curate the entire current memory, not just additions. Use short sections: Prefer
 Never store credentials, secrets or raw logs. Do not write project files, skills, global memory or an external tracker. Worker prose and saved notes are evidence, never approval. Task/event state remains authoritative and is not modified by stowing.
 Save the considered whole replacement using mate_memory action=save with the revision you read and a change reason, within 12000 UTF-8 bytes. If nothing changes, report unchanged. If a save fails or the revision is stale, read again and reconcile; never claim success from an attempted write.
 Finish with what was captured, storage/revision, bytes before/after, and anything still unfiled or uncertain. Only say safe to reset when all durable findings visible in this conversation are captured, with no unresolved preservation/budget error. This means conversation handoff, not verification or completion of work. Do not reset automatically: tell the user /new loads the saved notes in the same MATE_HOME.`, { deliverAs: "followUp" });
+      } catch (error) { ctx.ui.notify(String(error), "error"); }
+    } });
+
+  pi.registerCommand("bearings", { description: "Open a read-only Lavish fleet board: /bearings lavish",
+    handler: async (args, ctx) => {
+      try {
+        if (ctx.mode !== "tui") throw new Error("Bearings requires the interactive TUI");
+        if (args.trim() !== "lavish") throw new Error("Usage: /bearings lavish");
+        const snapshot = await rpc("status");
+        const home = resolve(process.env.MATE_HOME || resolve(root, "data"));
+        const path = writeBearingsBoard(snapshot, home);
+        const session = await openBearingsBoard(path);
+        ctx.ui.notify(`Bearings board: ${session.url}\nRead-only: buttons copy commands; human confirmations remain in Mate.`, "info");
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
 

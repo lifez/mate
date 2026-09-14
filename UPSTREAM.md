@@ -45,6 +45,17 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   imported. Original component baselines/hashes/notices remain unchanged; not a
   full Firstmate audit. Disposable Python and native Pi fake-model checks only.
 
+- Mate-owned `/bearings lavish`, referencing Firstmate's Bearings skill, bounded
+  snapshot projection and board builder at local commit `a27646c` (read in full;
+  no fetch). Selected concepts: one current bounded state source, four stable sections,
+  a rebuilt private stable board path and explicit separation between presentation and
+  authority. Mate renders its existing 50-row SQLite status snapshot directly into a
+  self-contained read-only board and opens it with installed `lavish-axi`; buttons only
+  copy existing human commands. No backlog/secondmate/PR discovery, hold aging, model
+  composition, answer binding, polling listener, merge/dispatch action or Firstmate
+  HTML/shell code imported. Existing human approval/completion/cancellation and event
+  acknowledgement gates are unchanged. Tests use a disposable home and fake Lavish CLI.
+
 - Mate-owned `/stow` and `mate_memory`, referencing Firstmate's internal and public
   stow skills at local commit `869ae905779c4c366a45759be8676406a1aae85c` (both read in
   full; no fetch). Selected concepts: inspect-before-update, whole-memory curation,

@@ -166,6 +166,20 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R06", "R07"],
+      "description": "Mate-owned /bearings lavish: atomically rebuild a private stable HTML board from the existing bounded SQLite status snapshot and open it with installed lavish-axi. Four deterministic sections show current human calls, completions, active work, approved/other queued state and pending events. Board controls only copy existing Mate commands; no polling/answer binding or task/event/repository mutation. Human-only approval/completion/cancellation and acknowledgement gates remain unchanged. No Firstmate HTML or shell code copied.",
+      "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
+      "reviewed_scope": "Firstmate Bearings skill, snapshot projection and board-builder contracts read fully; selected single-source bounded projection, four-section presentation, stable private board path and presentation/authority separation only.",
+      "sources": [
+        { "path": ".agents/skills/bearings/SKILL.md", "blob": "7de9c9c4a67fdd8e525e469db9586f1d0f5139e4", "mode": "reference-only" },
+        { "path": "bin/fm-bearings-snapshot.sh", "blob": "8f7bda840db1023f5ec3740fdb1595bb5efda95a", "mode": "reference-only" },
+        { "path": "bin/fm-bearings-board.sh", "blob": "2cb9506d721f3208fa0ad330069b1c936ac5c746", "mode": "reference-only" },
+        { "path": ".agents/skills/bearings/assets/board-template.html", "blob": "987db2d8c03d822f333e30b6176bcbd0049acf82", "mode": "reference-only" }
+      ],
+      "paths": [".pi/extensions/lib/bearings.ts", ".pi/extensions/mate-supervisor.ts", "tests/extension-check.mjs", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R06"],
       "description": "Mate-owned natural-language dispatch profiles in the existing mate.config.json: dispatch.rules maps task descriptions to concrete Pi model/effort profiles, with human override then best semantic rule then worker default precedence. Active rules require explicit initial-dispatch model and effort; Python and TypeScript validation fail closed. No separate crew-dispatch file, profile arrays, quota balancing, harness switching or upstream shell parser copied.",
       "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
