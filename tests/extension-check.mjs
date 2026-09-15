@@ -7,6 +7,12 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const ahoy = readFileSync(join(sourceRoot, '.pi/skills/ahoy/SKILL.md'), 'utf8');
+assert.match(ahoy, /^---\nname: ahoy\ndescription: .+\n---/);
+assert.match(ahoy, /Otherwise, use only visible session history\. Do not call tools/);
+assert.match(ahoy, /call `mate_status` once/);
+assert.match(ahoy, /present only the one you judge most impactful/);
+assert.doesNotMatch(ahoy, /fm-session-start|FIRSTMATE_OP/);
 const tmp = mkdtempSync(join(tmpdir(), 'mate-extension-'));
 const root = join(tmp, 'mate');
 // Run the real extension/control plane from a disposable installation, never personal config.

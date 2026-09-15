@@ -166,6 +166,18 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R02", "R03", "R06"],
+      "description": "Mate-owned /skill:ahoy: recap only visible session events since the prior real human message, retain a cross-boundary inventory of visibly unanswered decisions, and guide one decision at a time in model-judged impact order. A first-real-human-message invocation uses one bounded mate_status snapshot instead of Firstmate session-start/Bearings dependencies. Explicit runtime-message exclusions preserve the human boundary; normal recaps call no tools and neither branch mutates task/event state or bypasses human gates.",
+      "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
+      "reviewed_scope": "Firstmate Ahoy skill read completely; adapted visible-history boundary, unanswered-decision and first-message fallback contracts only. No session-start helper, Bearings invocation, shell code or fleet mutation imported.",
+      "sources": [
+        { "path": ".agents/skills/ahoy/SKILL.md", "blob": "abca63253fb9bf8d68d23db9c15650f111cf7cad", "mode": "adapted" }
+      ],
+      "paths": [".pi/skills/ahoy/SKILL.md", "README.md", "tests/extension-check.mjs"],
+      "license": "third_party/firstmate/LICENSE",
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R06", "R07"],
       "description": "Mate-owned /bearings lavish: atomically rebuild a private stable HTML board from the existing bounded SQLite status snapshot and open it with installed lavish-axi. Four deterministic sections show current human calls, completions, active work, approved/other queued state and pending events. Board controls only copy existing Mate commands; no polling/answer binding or task/event/repository mutation. Human-only approval/completion/cancellation and acknowledgement gates remain unchanged. No Firstmate HTML or shell code copied.",
       "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",

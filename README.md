@@ -123,9 +123,14 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
+- `/skill:ahoy` — recap visible events since your prior real message, surface unanswered decisions one at a time, or show a bounded current-state digest when invoked first.
 - `/calm [on|off|status]` — toggle quieter Mate rendering (no argument toggles).
 - `/stow` — curate and save private memory/open next steps before a session reset (uses the current model; no automatic reset).
 - `/bearings lavish` — rebuild and open the private read-only Lavish fleet board from current Mate state.
+
+Ahoy's normal recap reads only visible conversation history and does not refresh task
+state. Its first-message fallback reads one bounded `mate_status` snapshot; it never
+acknowledges, dispatches, approves, completes or changes task records.
 
 `/bearings lavish` uses the same bounded local status snapshot as `/mate-status` and
 writes `MATE_HOME/.lavish/bearings-board.html` atomically with private permissions.

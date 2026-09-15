@@ -11,6 +11,14 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned `/skill:ahoy`, adapted from Firstmate's Ahoy skill at local commit
+  `a27646c` (read in full; no fetch). It keeps the visible-history recap, cross-boundary
+  unanswered-decision inventory, one-at-a-time impact-ordered guidance and first-real-
+  human-message fallback. Mate replaces Firstmate session-start/Bearings dependencies
+  with one bounded `mate_status` fallback and explicit runtime-message exclusions.
+  Normal recaps call no tools; neither branch mutates tasks/events or bypasses human
+  approval/completion gates. No shell helper, fresh report read or fleet action added.
+
 - Mate-owned natural-language dispatch profiles inside existing `mate.config.json`:
   `dispatch.rules[].when/use/why` selects a concrete Pi model/effort before approval,
   with human override → matching rule → worker default precedence and an explicit-field
