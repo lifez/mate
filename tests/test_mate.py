@@ -376,6 +376,11 @@ class MateTests(unittest.TestCase):
                 snapshot = m.snapshot(self.db, dict(task_offset=offset))
                 self.assertEqual(snapshot['total_tasks'], 57)
                 self.assertEqual(snapshot['open_tasks'], 6)
+            open_snapshot = m.snapshot(self.db, {'open_only': True})
+            self.assertEqual(len(open_snapshot['tasks']), 6)
+            self.assertTrue(all(t['state'] not in ('complete', 'cancelled') for t in open_snapshot['tasks']))
+            with self.assertRaisesRegex(ValueError, 'open_only must be a boolean'):
+                m.snapshot(self.db, {'open_only': 1})
             self.assertTrue(all(t['state'] == 'complete' for t in m.snapshot(self.db, {})['tasks']))
         with patch.object(m, 'tasks', return_value=records[:51]):
             self.assertEqual(m.snapshot(self.db, {})['open_tasks'], 0)
@@ -834,6 +839,21 @@ print('fixture-private-output')
         self.assertFalse(m.snapshot(self.db, {})["events"])
         self.assertEqual(m.load(self.db, "fix")["state"], "awaiting-base")
 
+    def test_herdr_pane_presence_requires_structured_exact_evidence(self):
+        task = dict(socket='/tmp/herdr.sock', session='mate')
+        cases = (
+            ('{"error":{"code":"pane_not_found"}}', '', 1, 'gone'),
+            ('{"result":{"pane":{"pane_id":"w1:p2"}}}', '', 0, 'present'),
+            ('{"result":{"pane":{"pane_id":"w1:p3"}}}', '', 0, 'unknown'),
+            ('not json', '', 1, 'unknown'),
+        )
+        for stdout, stderr, code, expected in cases:
+            response = m.subprocess.CompletedProcess([], code, stdout, stderr)
+            with self.subTest(expected=expected, stdout=stdout), patch.object(m.subprocess, 'run', return_value=response):
+                self.assertEqual(m.herdr_pane_presence(task, 'w1:p2'), expected)
+        with patch.object(m.subprocess, 'run', side_effect=m.subprocess.TimeoutExpired('herdr', 20)):
+            self.assertEqual(m.herdr_pane_presence(task, 'w1:p2'), 'unknown')
+
     def test_optional_tab_close_checks_identity_activity_and_preserves_resources(self):
         task = self.propose()
         (self.home / 'fix').mkdir()
@@ -874,26 +894,36 @@ print('fixture-private-output')
             with self.assertRaisesRegex(ValueError, 'idle shell'): m.close_tab(self.db, params)
             process['foreground_processes'] = [dict(pid=10)]
             self.assertEqual(closed, [])
-            result = m.close_tab(self.db, params)
+            with patch.object(m, 'herdr_pane_presence', return_value='gone'):
+                result = m.close_tab(self.db, params)
             self.assertEqual(result['state'], 'complete')
             self.assertEqual(result['tab_close_state'], 'closed')
             self.assertTrue(result['tab_closed_by'])
             self.assertEqual(result['sha'], task['sha'])
             self.assertEqual(m.close_tab(self.db, params), result)
             self.assertEqual(closed, [('tab', 'close', 'w1:t2')])
-        # Simulate an ambiguous close receipt; never automatically try again.
+        # A successful close receipt without exact absence is still uncertain.
         with self.db: m.save(self.db, task)
+        with patch.object(m, 'herdr', endpoint), patch.object(m, 'herdr_pane_presence', return_value='present'):
+            with self.assertRaisesRegex(RuntimeError, 'exact pane is present'):
+                m.close_tab(self.db, params)
+        self.assertEqual(m.load(self.db, 'fix')['tab_close_state'], 'uncertain')
+        # A lost receipt is resolved only by structured proof that the exact pane is gone.
         def ambiguous(t, *args):
             if args[:2] == ('tab', 'close'): raise RuntimeError('lost receipt')
             return endpoint(t, *args)
-        with patch.object(m, 'herdr', ambiguous):
+        with self.db: m.save(self.db, task)
+        with patch.object(m, 'herdr', ambiguous), patch.object(m, 'herdr_pane_presence', return_value='gone'):
+            self.assertEqual(m.close_tab(self.db, params)['tab_close_state'], 'closed')
+        with self.db: m.save(self.db, task)
+        with patch.object(m, 'herdr', ambiguous), patch.object(m, 'herdr_pane_presence', return_value='unknown'):
             with self.assertRaisesRegex(RuntimeError, 'lost receipt'): m.close_tab(self.db, params)
         self.assertEqual(m.load(self.db, 'fix')['tab_close_state'], 'uncertain')
         with patch.object(m, 'herdr', side_effect=AssertionError('No retry')):
             with self.assertRaisesRegex(ValueError, 'uncertain'): m.close_tab(self.db, params)
         self.assertEqual(m.load(self.db, 'fix')['state'], 'complete')
 
-    def test_optional_lease_return_refuses_dirty_and_journals_uncertainty(self):
+    def test_optional_lease_return_offers_exact_dirty_files_and_journals_uncertainty(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
         with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
@@ -905,10 +935,14 @@ print('fixture-private-output')
                           lease_id=task['lease']['lease_id'], lease_holder=task['lease']['lease_holder'])
             dirty = Path(task['worktree']) / 'unfinished.txt'
             dirty.write_text('keep me')
+            inspection = m.inspect_return_lease(self.db, params)
+            self.assertEqual(inspection['changes'], ['?? unfinished.txt'])
             with self.assertRaisesRegex(ValueError, 'uncommitted'):
                 m.return_lease(self.db, params)
-            dirty.unlink()
-            returned = m.return_lease(self.db, params)
+            with self.assertRaisesRegex(ValueError, 'differ from the files shown'):
+                m.return_lease(self.db, dict(params, clean=True, changes=[]))
+            returned = m.return_lease(self.db, dict(params, clean=True, changes=inspection['changes']))
+            self.assertFalse(dirty.exists())
             self.assertEqual(returned['lease_return_state'], 'returned')
             self.assertTrue(returned['lease_returned_by'])
             self.assertEqual(m.return_lease(self.db, params), returned)
@@ -1304,6 +1338,46 @@ print('fixture-private-output')
                 m.wait_ready_pane({}, 5)
         ready.assert_called_once_with({})
         sleep.assert_not_called()
+
+    def test_stopped_worker_rebinds_only_an_exact_idle_restored_terminal(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+        task['state'] = 'review'
+        with self.db:
+            m.save(self.db, task)
+
+        foreign_cwd = False
+        def restored(t, *args):
+            result = self.fake_herdr(t, *args)
+            if args[:2] == ('pane', 'get'):
+                cwd = str(self.repo) if foreign_cwd else t['worktree']
+                result['pane'].update(terminal_id='restored-terminal', cwd=cwd, foreground_cwd=cwd)
+            return result
+
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', restored):
+            with self.assertRaises(m.TerminalIdentityChanged):
+                m.ready_pane(task)
+            before = m.load(self.db, 'fix')
+            foreign_cwd = True
+            with self.assertRaisesRegex(ValueError, 'saved worktree'):
+                m.resume(self.db, dict(id='fix', message='Continue after reboot'))
+            self.assertEqual(m.load(self.db, 'fix'), before)
+            foreign_cwd = False
+            self.leases[0]['processes'].append(dict(pid=101))
+            with self.assertRaisesRegex(ValueError, 'other worktree processes'):
+                m.resume(self.db, dict(id='fix', message='Continue after reboot'))
+            self.assertEqual(m.load(self.db, 'fix'), before)
+            self.leases[0]['processes'].pop()
+            continued = m.resume(self.db, dict(id='fix', message='Continue after reboot'))
+        self.assertEqual((continued['state'], continued['attempt']), ('launching', 2))
+        self.assertEqual(continued['terminal_id'], 'restored-terminal')
+        self.assertEqual(continued['endpoint_receipt']['root_pane']['terminal_id'], 'original-terminal')
+        self.assertEqual(continued['terminal_rebindings'], [dict(
+            old_terminal_id='original-terminal', new_terminal_id='restored-terminal',
+            pane=task['pane'], at=continued['terminal_rebindings'][0]['at'], via='mate_continue')])
+        self.assertEqual((self.acquires, self.launches), (1, 2))
 
     def test_new_pane_readiness_still_refuses_after_deadline(self):
         error = ValueError('Worker pane has background/stopped processes; inspect before continuing')

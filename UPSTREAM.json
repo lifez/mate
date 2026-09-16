@@ -166,6 +166,18 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R03", "R05"],
+      "description": "Mate-owned exact post-close verification for optional completed-task tab closure. After one journaled Herdr tab close, re-read the exact saved pane and record closed only for a structured pane_not_found response; success-but-present, unreadable responses, and close errors without that proof remain uncertain and are never retried automatically. A lost close receipt may complete only when the independent exact-pane postcondition proves absence. Durable task/endpoint identity, worktree, lease, reports and session remain retained. Reference-only; no Firstmate shell code copied.",
+      "source_commit": "b430bf50d9aea5d1a810cab1bd293670bbca64be",
+      "reviewed_scope": "Firstmate #4510 endpoint-close refusal at 1bdfd8ce plus the current Herdr structured pane presence and confirmed-gone gates; selected only the fail-closed postcondition invariant.",
+      "sources": [
+        { "path": "bin/fm-teardown.sh", "blob": "cd14c1c5dc586969664606c9ba0031d6614f94f3", "mode": "reference-only" },
+        { "path": "bin/backends/herdr.sh", "blob": "41254e26d0fc85096ce65fb8f9b3af99ab038ec7", "mode": "reference-only" }
+      ],
+      "paths": ["bin/mate.py", "tests/test_mate.py", "README.md"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned /skill:ahoy: recap only visible session events since the prior real human message, retain a cross-boundary inventory of visibly unanswered decisions, and guide one decision at a time in model-judged impact order. A first-real-human-message invocation uses one bounded mate_status snapshot instead of Firstmate session-start/Bearings dependencies. Explicit runtime-message exclusions preserve the human boundary; normal recaps call no tools and neither branch mutates task/event state or bypasses human gates.",
       "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
@@ -295,6 +307,18 @@
       "local_commit": null
     },
     {
+      "component_ids": ["R03", "R04", "R05"],
+      "description": "Mate-owned stopped-terminal rebind after host reboot: mate_continue retains the immutable creation receipt and accepts a changed terminal ID only for review/failed tasks after exact endpoint, lease/holder, worktree/repository/branch/base ancestry, cwd, idle-shell, sole Treehouse process and orphan-process checks under the worker lock. Old/new identity audit is persisted before one continuation launch. Firstmate commits 3e817d3 (missing endpoint/drift recovery) and e0d269e (process-level stale-agent classification) were selected as reference-only safety boundaries; Mate keeps saved-session continuation and does not import Firstmate relaunch/projection machinery.",
+      "source_commit": "a27646c4eae5d807027c3ebcb783234e0d212958",
+      "reviewed_scope": "Firstmate current local main: host-reboot missing endpoint classification, exact no-agent projection reclaim, and process-level live/stale/unknown refusal boundaries only.",
+      "sources": [
+        { "path": "bin/backends/herdr.sh", "mode": "reference-only" },
+        { "path": "bin/fm-spawn.sh", "mode": "reference-only" }
+      ],
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "README.md", "tests/test_mate.py"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R04", "R06"],
       "description": "Mate-owned replacement of unapproved task scope: repeat mate_propose with the same ID/repository/base to update only an awaiting-base brief while retaining its pinned SHA and branch. Base approval includes the exact displayed brief so stale dialogs fail closed; approved proposals remain immutable. No upstream import or provenance baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
@@ -314,7 +338,7 @@
     },
     {
       "component_ids": ["R02", "R03"],
-      "description": "Mate-owned footer fix: snapshot open_tasks counts non-complete tasks before pagination; footer uses this count while total/history and pending events remain unchanged. No upstream import or baseline change.",
+      "description": "Mate-owned status filtering: snapshot open_tasks counts non-complete tasks before pagination, the footer uses this count, and /mate-status filters closed task rows before pagination while mate_status retains historical inspection. Totals and pending events remain unchanged. No upstream import or baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "tests/test_mate.py", "tests/extension-check.mjs", "README.md"],
       "local_commit": null
     },

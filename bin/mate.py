@@ -121,6 +121,28 @@ def herdr(task, *args):
     return data["result"]
 
 
+def herdr_pane_presence(task, pane):
+    """Classify one exact pane from its structured body, never its exit status."""
+    env = os.environ.copy()
+    env["HERDR_SOCKET_PATH"] = task["socket"]
+    try:
+        result = subprocess.run(["herdr", "--session", task["session"], "pane", "get", pane],
+                                capture_output=True, text=True, env=env, timeout=20)
+        data = json.loads((result.stdout + result.stderr).strip())
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
+        return "unknown"
+    if not isinstance(data, dict):
+        return "unknown"
+    error = data.get("error")
+    if isinstance(error, dict) and error.get("code") == "pane_not_found":
+        return "gone"
+    payload = data.get("result")
+    info = payload.get("pane") if isinstance(payload, dict) else None
+    if isinstance(info, dict) and info.get("pane_id") == pane:
+        return "present"
+    return "unknown"
+
+
 def check_endpoint(task, pane):
     result = herdr(task, "pane", "get", pane)
     info = result.get("pane", {})
@@ -132,6 +154,10 @@ def check_endpoint(task, pane):
 def endpoint_pane(task):
     receipt = task.get("endpoint_receipt", {})
     return receipt.get("pane", {}) if task.get("same_tab_as") else receipt.get("root_pane", {})
+
+
+def terminal_id(task):
+    return task.get("terminal_id") or endpoint_pane(task).get("terminal_id")
 
 
 def check_split_target(task):
@@ -445,7 +471,8 @@ def dispatch(db, p):
         task.update(same_tab_as=reference, split_target=dict(
             session=source.get("session"), socket=source.get("socket"), workspace=source.get("workspace"),
             tab=caller.get("tab_id") if reference == "supervisor" else source.get("tab"),
-            pane=parent if reference == "supervisor" else source.get("pane"), terminal_id=pane.get("terminal_id")))
+            pane=parent if reference == "supervisor" else source.get("pane"),
+            terminal_id=pane.get("terminal_id") if reference == "supervisor" else terminal_id(source)))
     if task.get("same_tab_as"):
         check_split_target(task)
     pi_binary = shutil.which("pi")
@@ -511,6 +538,7 @@ def dispatch(db, p):
         actual = check_endpoint(task, task["pane"])
         if not pane.get("terminal_id") or actual.get("terminal_id") != pane["terminal_id"]:
             raise ValueError("Created terminal identity mismatch")
+        task["terminal_id"] = pane["terminal_id"]
         with db:
             save(db, task)
         launch_worker(task, NEW_PANE_READY_TIMEOUT)
@@ -817,11 +845,15 @@ def recover_acquire_cli(ident):
             print("Recovered to approved. Restart the same Mate home; explicitly request dispatch when ready.")
 
 
-def ready_pane(task):
+class TerminalIdentityChanged(ValueError):
+    pass
+
+
+def ready_pane(task, expected_terminal_id=None):
     pane = check_endpoint(task, task["pane"])
-    original = endpoint_pane(task).get("terminal_id")
+    original = expected_terminal_id or terminal_id(task)
     if not original or pane.get("terminal_id") != original:
-        raise ValueError("Worker terminal identity changed; inspect the original pane")
+        raise TerminalIdentityChanged("Worker terminal identity changed; inspect the original pane")
     process = herdr(task, "pane", "process-info", "--pane", task["pane"]).get("process_info", {})
     foreground = process.get("foreground_processes", [])
     shell = process.get("shell_pid")
@@ -845,6 +877,39 @@ def ready_pane(task):
            for pid, row in rows.items()):
         raise ValueError("Worker pane has background/stopped processes; inspect before continuing")
     return shell, rows
+
+
+def inspect_terminal_rebind(task):
+    """Prove a reboot-restored stopped pane before accepting its new terminal incarnation."""
+    if not endpoint_pane(task).get("terminal_id"):
+        raise ValueError("Original terminal receipt is missing; terminal rebind refused")
+    pane = check_endpoint(task, task["pane"])
+    old = terminal_id(task)
+    new = pane.get("terminal_id")
+    if not old or not new or new == old:
+        raise ValueError("Terminal rebind requires distinct old and current identities")
+    shell, processes = ready_pane(task, new)
+    lease = check_lease(task)
+    inventory = lease.get("processes")
+    if (not isinstance(inventory, list) or len(inventory) != 1 or
+        not isinstance(inventory[0], dict) or inventory[0].get("pid") != shell):
+        raise ValueError("Treehouse process inventory is uncertain or contains other worktree processes")
+    wt = task["worktree"]
+    if (pane.get("cwd") != wt or pane.get("foreground_cwd") != wt or
+        git(wt, "rev-parse", "--show-toplevel") != wt or wt == task["repo"] or
+        git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir") !=
+        git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir") or
+        git(wt, "symbolic-ref", "HEAD") != "refs/heads/" + task["branch"]):
+        raise ValueError("Restored terminal does not match the saved worktree/repository/branch")
+    git(wt, "merge-base", "--is-ancestor", task["sha"], "HEAD")
+    markers = (str(HOME / task["id"]), wt, f"{ROOT / 'bin/mate.py'} worker {task['id']} ")
+    if any(pid != shell and any(marker in row["args"] for marker in markers)
+           for pid, row in processes.items()):
+        raise ValueError("Possible task/session process remains; terminal rebind refused")
+    if check_endpoint(task, task["pane"]).get("terminal_id") != new:
+        raise ValueError("Worker terminal identity changed during recovery")
+    return dict(old_terminal_id=old, new_terminal_id=new, pane=task["pane"],
+                at=time.time(), via="mate_continue")
 
 
 def inspect_missing_launch(db, task):
@@ -883,6 +948,8 @@ def inspect_missing_launch(db, task):
     if any((folder / name).exists() or (folder / name).is_symlink() for name in
            (f"events-{attempt}.jsonl", f"stderr-{attempt}.log", f"report-{attempt}.txt")):
         raise ValueError("Attempt has execution artifacts; possible orphan worker, recovery refused")
+    if not endpoint_pane(task).get("terminal_id"):
+        raise ValueError("Original terminal receipt is missing; recovery refused")
     shell, processes = ready_pane(task)
     lease = check_lease(task)
     wt = task["worktree"]
@@ -986,17 +1053,24 @@ def resume(db, p):
     message = text(p["message"], "message")
     recovering = task["state"] == "attention"
     initial = False
+    terminal_rebind = None
     # Keep late old wrappers out until checks and the next-attempt journal commit finish.
     with lock(HOME / task["id"] / "run.lock"):
         if recovering:
             initial = inspect_missing_launch(db, task)
         else:
-            ready_pane(task)
-            check_lease(task)
+            try:
+                ready_pane(task)
+                check_lease(task)
+            except TerminalIdentityChanged:
+                terminal_rebind = inspect_terminal_rebind(task)
         check_capacity(db, inspected=task["id"] if recovering else None)
         if load(db, task["id"]) != task:
             raise ValueError("Task changed during continuation checks")
         with db:
+            if terminal_rebind:
+                task.setdefault("terminal_rebindings", []).append(terminal_rebind)
+                task["terminal_id"] = terminal_rebind["new_terminal_id"]
             if recovering:
                 previous = {k: v for k, v in task.items() if k != "launch_recoveries"}
                 task.setdefault("launch_recoveries", []).append(dict(task=previous, at=time.time(),
@@ -1056,6 +1130,17 @@ def complete(db, p):
     return task  # No acknowledgement, resource cleanup, or Git operations.
 
 
+def inspect_return_lease(db, p):
+    task = load(db, p['id'])
+    lease = task.get('lease', {})
+    if (task['state'] != 'complete' or p.get('attempt') != task['attempt'] or
+        p.get('worktree') != task.get('worktree') or p.get('lease_id') != lease.get('lease_id') or
+        p.get('lease_holder') != lease.get('lease_holder')):
+        raise ValueError('Lease return requires the exact completed task/attempt/worktree/lease')
+    return {'changes': git(task['worktree'], '-c', 'status.showUntrackedFiles=all',
+                           'status', '--porcelain').splitlines()}
+
+
 def return_lease(db, p):
     task = load(db, p['id'])
     lease = task.get('lease', {})
@@ -1082,8 +1167,21 @@ def return_lease(db, p):
             if (not isinstance(processes, list) or len(processes) != 1 or
                 not isinstance(processes[0], dict) or processes[0].get('pid') != shell):
                 raise ValueError('Treehouse process inventory is uncertain or contains other worktree processes')
-        if git(task['worktree'], '-c', 'status.showUntrackedFiles=all', 'status', '--porcelain'):
+        changes = git(task['worktree'], '-c', 'status.showUntrackedFiles=all',
+                      'status', '--porcelain').splitlines()
+        clean = p.get('clean', False)
+        if type(clean) is not bool:
+            raise ValueError('clean must be a boolean')
+        if changes and not clean:
             raise ValueError('Worktree has uncommitted changes; commit or remove them before returning the lease')
+        if clean:
+            if p.get('changes') != changes:
+                raise ValueError('Worktree changes differ from the files shown for confirmation; inspect again')
+            if changes:
+                git(task['worktree'], 'reset', '--hard', 'HEAD')
+                git(task['worktree'], 'clean', '-fd')
+                if git(task['worktree'], '-c', 'status.showUntrackedFiles=all', 'status', '--porcelain'):
+                    raise ValueError('Worktree remains dirty after approved cleanup; lease retained')
         if load(db, task['id']) != task:
             raise ValueError('Task changed during lease return checks; confirm again')
         task['lease_return_state'] = 'returning'
@@ -1128,7 +1226,7 @@ def close_tab(db, p):
         raise ValueError('Worker is still active; cannot close its tab') from None
     try:
         pane = check_endpoint(task, task['pane'])
-        original = endpoint_pane(task).get('terminal_id')
+        original = terminal_id(task)
         if not original or pane.get('terminal_id') != original:
             raise ValueError('Worker terminal identity changed; refusing to close a reused pane')
         tab = herdr(task, 'tab', 'get', task['tab']).get('tab', {})
@@ -1143,13 +1241,20 @@ def close_tab(db, p):
         task['tab_close_state'] = 'closing'
         with db:
             save(db, task)  # Journal before an external operation with an ambiguous failure mode.
+        close_error = None
         try:
             herdr(task, 'tab', 'close', task['tab'])
         except Exception as exc:
-            task.update(tab_close_state='uncertain', tab_close_error=str(exc))
+            close_error = exc
+        presence = herdr_pane_presence(task, task['pane'])
+        if presence != 'gone':
+            detail = str(close_error) if close_error else f'Herdr close was not confirmed; exact pane is {presence}'
+            task.update(tab_close_state='uncertain', tab_close_error=detail)
             with db:
                 save(db, task)
-            raise
+            if close_error:
+                raise close_error
+            raise RuntimeError(detail)
         task.update(tab_close_state='closed', tab_closed_at=time.time(),
                     tab_closed_by=pwd.getpwuid(os.getuid()).pw_name)
         with db:
@@ -1214,10 +1319,14 @@ def snapshot(db, p):
     if offset and ("attempt" not in p or history):
         raise ValueError("Report continuation requires an explicit attempt and no history")
     all_tasks = tasks(db)
+    open_only = p.get("open_only", False)
+    if type(open_only) is not bool:
+        raise ValueError("open_only must be a boolean")
+    visible_tasks = [t for t in all_tasks if t["state"] not in ("complete", "cancelled")] if open_only and not p.get("id") else all_tasks
     start = int(p.get("task_offset", 0))
     if start < 0:
         raise ValueError("Invalid task offset")
-    result = {"total_tasks": len(all_tasks), "open_tasks": sum(t["state"] not in ("complete", "cancelled") for t in all_tasks), "tasks": sorted(all_tasks, key=lambda t: t["updated"], reverse=True)[start:start + 50], "events": [dict(zip(("id", "task", "attempt", "kind", "note"), row))
+    result = {"total_tasks": len(all_tasks), "open_tasks": sum(t["state"] not in ("complete", "cancelled") for t in all_tasks), "tasks": sorted(visible_tasks, key=lambda t: t["updated"], reverse=True)[start:start + 50], "events": [dict(zip(("id", "task", "attempt", "kind", "note"), row))
               for row in db.execute("SELECT id,task,attempt,kind,note FROM events WHERE ack IS NULL ORDER BY id LIMIT 50")]}
     if p.get("id"):
         task = load(db, p["id"])
@@ -1395,7 +1504,7 @@ def serve():
     methods = dict(propose=propose, approve=approve, propose_scope=propose_scope, review_scope=review_scope,
                    dispatch=dispatch, resume=resume, inspect_cancel=inspect_cancel, cancel=cancel,
                    status=snapshot, memory=memory, ack=acknowledge, complete=complete,
-        return_lease=return_lease, close_tab=close_tab)
+        inspect_return_lease=inspect_return_lease, return_lease=return_lease, close_tab=close_tab)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
     native = NativeEvents(db, selector)

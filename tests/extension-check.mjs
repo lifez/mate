@@ -607,18 +607,25 @@ try {
   assert.equal(cancelled.completed_at, undefined);
   assert.equal(cancelled.cancelled_via, 'mate-cancel');
   assert.equal((await call('mate_status')).open_tasks, 0, 'cancelled history is not open capacity');
+  await commands['mate-status'].handler('', ctx);
+  const commandStatus = JSON.parse(notices.at(-1)[0]);
+  assert.equal(commandStatus.total_tasks, 2, 'status keeps the retained-history count');
+  assert.deepEqual(commandStatus.tasks, [], '/mate-status shows open tasks only');
   assert.equal(messages.filter(m => m.message.customType === 'mate-cancelled').length, 1);
   await commands['mate-cancel'].handler('cancel-me', ctx);
   assert.equal(cancelled.cancellation_history, undefined, 'cancellation audit stays cold by default');
   cancelled = (await call('mate_status', { id: 'cancel-me', history: true })).tasks[0];
   assert.equal(cancelled.cancellation_history.length, 1, 'repeat preserves original cancellation audit');
 
-  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['same_tab_as']='supervisor'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
-  await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async title => {
-    if (title === 'Return Treehouse worktree too?') return false;
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(same_tab_as='supervisor',worktree=${JSON.stringify(repo)},lease={'lease_id':'lease-test','lease_holder':'holder-test'})\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
+  writeFileSync(join(repo, 'unfinished.txt'), 'keep me');
+  let returnBody = '';
+  await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
+    if (title === 'Return Treehouse worktree too?') { returnBody = body; return false; }
     throw new Error('Must not offer shared-tab closure');
   } } });
   assert.match(notices.at(-2)[0], /Shared tab retained/);
+  assert.match(returnBody, /\?\? unfinished\.txt/);
   assert.match(notices.at(-1)[0], /lease retained/);
   assert.equal(tools.mate_dispatch.parameters.properties.same_tab_as.type, 'string');
   assert.match(tools.mate_dispatch.description, /same_tab_as/);

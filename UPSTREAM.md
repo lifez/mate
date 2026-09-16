@@ -26,11 +26,14 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   at local `a27646c` reference-only; no separate config file, harness switching, profile
   arrays, quota routing or shell parser copied. Python/TypeScript validate fail closed.
 
-- Mate-owned compact status: default task inspection includes current approved and
-  pending scope, latest scope token/first-attempt, settings/error/startup and usage
-  totals; full historical journal is opt-in with `history: true`. Pinned subsequent
-  report pages omit repeated task/event/usage payloads. Human dialogs retain full
-  reads and existing approval/completion gates. No journal/schema mutation.
+- Mate-owned compact status: `/mate-status` filters completed/cancelled task rows
+  before pagination while retaining total/open counts and pending events; the
+  `mate_status` model tool keeps historical rows and ID inspection. Default task
+  inspection includes current approved and pending scope, latest scope token/first-
+  attempt, settings/error/startup and usage totals; full historical journal is opt-in
+  with `history: true`. Pinned subsequent report pages omit repeated task/event/usage
+  payloads. Human dialogs retain full reads and existing approval/completion gates.
+  No journal/schema mutation.
 - R06 reference-only brief authoring contract: selected `bin/fm-brief.sh` at local
   Firstmate `a27646c` (no fetch), specifically Captain's intent vs Firstmate spec and
   explicit deliverable/evidence sections. Mate uses five concise sections in its
@@ -143,6 +146,16 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   startup rerun or approval changes. Shared launch preflight prevents sending into
   a busy foreground app and explicitly enters the saved worktree root. No generic
   crash bypass, cleanup, new upstream import or provenance baseline change.
+
+- Mate-owned stopped-terminal rebind after a host reboot: `mate_continue` retains the
+  immutable creation receipt and accepts a changed terminal ID only for `review`/`failed`
+  tasks after exact endpoint, lease, worktree/repository/branch/base ancestry, cwd,
+  idle-shell, sole Treehouse process and orphan-process checks under the worker lock;
+  append old/new identity audit before one continuation launch. Selected Firstmate
+  `3e817d3` missing-endpoint recovery and `e0d269e` process-level stale-agent classifier
+  as reference-only safety boundaries; Mate resumes its saved Pi session rather than
+  importing Firstmate's fresh-agent relaunch/projection stack. Generic attention,
+  cleanup, reacquisition and uncertain/live-pane adoption remain refused.
   Local follow-up: use parent/process-group ownership, not shared TTY, for shell
   background-job checks; detached prompt helpers are not worker jobs. Keep separate
   task/session and worktree orphan checks; no process-name whitelist.
@@ -192,7 +205,10 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Mate-owned optional tab closure + Treehouse return: หลัง complete ถามยืนยันแยก;
   ตรวจ original terminal identity/worker lock/single pane/foreground shell ก่อนปิดแท็บ และคืนเฉพาะ
   exact lease path/ID/holder เมื่อ worktree clean/process inventory ปลอดภัย โดยไม่ใช้ `--force`;
-  journal ambiguous external outcomes, เก็บ task branch/report/session/cost และไม่ import upstream cleanup machinery
+  หลัง close อ่าน exact pane ซ้ำและยอมรับเฉพาะ structured `pane_not_found`; success-but-present,
+  unreadable หรือ close error ที่ไม่มี proof นี้เป็น uncertain และไม่ retry. แนวคิด fail-closed
+  อ้างอิง Firstmate #4510 (`1bdfd8ce`) และ Herdr confirmed-gone gate ที่ current `b430bf50`,
+  reference-only ไม่ copy shell code; เก็บ task branch/report/session/cost และ durable identity ไว้
 - Mate-owned `/mate-complete ID`: human confirmation จาก review → complete เท่านั้น,
   ตรวจ exact attempt + worker lock, บันทึกเวลา/OS account; ไม่ ack/cleanup/merge และไม่มี reopen
   (ไม่มี upstream import เพิ่ม; tests ตรวจ gate/idempotency/persistence และ UI deny/accept)

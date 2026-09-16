@@ -323,7 +323,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ events: Type.Array(Type.Integer({ minimum: 1 }), { minItems: 1, maxItems: 50 }), note: Type.String({ maxLength: 2000 }) }),
     async execute(_id, params) { return result(await rpc("ack", params)); } });
   registerTool({ name: "mate_continue", label: "Continue delegated task",
-    description: "Continue a stopped review/failed worker in its original worktree/session. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), or an initial attempt-1 idle-shell/background-process preflight refusal before any command was sent, using a new attempt with retained history. Initial recovery requires no session/usage/execution artifacts and unchanged approved HEAD; it retains startup files and does not rerun startup. It observes up to 10 seconds: launch_confirmation started proves Pi process creation only, not completion or continued liveness; unconfirmed is not permission to retry. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
+    description: "Continue a stopped review/failed worker in its original worktree/session. If a reboot restored the exact stopped pane with a new terminal identity, Mate rebinds only after proving the exact lease/worktree/branch, worktree cwd, idle shell and absence of other worktree/task processes; the original receipt and rebind audit are retained. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), or an initial attempt-1 idle-shell/background-process preflight refusal before any command was sent, using a new attempt with retained history. Initial recovery requires no session/usage/execution artifacts and unchanged approved HEAD; it retains startup files and does not rerun startup. It observes up to 10 seconds: launch_confirmation started proves Pi process creation only, not completion or continued liveness; unconfirmed is not permission to retry. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
     parameters: Type.Object({ id: Type.String(), message: Type.String({ maxLength: 20000 }), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       const { tasks } = await rpc("status", { id: params.id });
@@ -433,11 +433,16 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         }
         if (task.lease_return_state === "returned") return;
         if (task.lease_return_state) throw new Error("Task remains complete, but previous Treehouse return is uncertain; inspect manually");
+        const leaseParams = { id: task.id, attempt: task.attempt, worktree: task.worktree,
+          lease_id: task.lease?.lease_id, lease_holder: task.lease?.lease_holder };
+        const changes: string[] = (await rpc("inspect_return_lease", leaseParams)).changes;
+        const dirty = changes.length
+          ? `\n\nUncommitted files:\n${changes.join("\n")}\n\nAccepting permanently discards these tracked changes and untracked files before returning the lease.`
+          : "";
         const release = await ctx.ui.confirm("Return Treehouse worktree too?",
-          `${task.id}\nWorktree: ${task.worktree}\nLease: ${task.lease?.lease_id}\nHolder: ${task.lease?.lease_holder}\n\nReturn only this exact lease. Mate refuses uncommitted changes or unexpected processes; it never uses --force. Treehouse may terminate the retained worker pane shell, detach/reset the pooled worktree and reuse it. The task branch, Mate reports, Pi session and cost records remain.`);
+          `${task.id}\nWorktree: ${task.worktree}\nLease: ${task.lease?.lease_id}\nHolder: ${task.lease?.lease_holder}${dirty}\n\nReturn only this exact lease. Mate refuses unexpected processes and never passes --force to Treehouse. Treehouse may terminate the retained worker pane shell, detach/reset the pooled worktree and reuse it. The task branch, Mate reports, Pi session and cost records remain.`);
         if (!release) { ctx.ui.notify("Task complete; Treehouse lease retained", "info"); return; }
-        task = await rpc("return_lease", { id: task.id, attempt: task.attempt, worktree: task.worktree,
-          lease_id: task.lease?.lease_id, lease_holder: task.lease?.lease_holder });
+        task = await rpc("return_lease", { ...leaseParams, clean: changes.length > 0, changes });
         pi.sendMessage({ customType: "mate-lease-returned", display: true,
           content: `Human confirmed returning ${task.id}'s exact Treehouse lease ${task.lease.lease_id}. Task branch, reports, session and cost records retained.` }, { triggerTurn: false });
         ctx.ui.notify("Treehouse lease returned; task records retained", "info");
@@ -469,8 +474,8 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         ctx.ui.notify(`${cancelled.id} cancelled; history and evidence retained`, "info");
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
-  pi.registerCommand("mate-status", { description: "Show local tasks without using model quota",
-    handler: async (_args, ctx) => { try { ctx.ui.notify(JSON.stringify(await rpc("status"), null, 2), "info"); } catch (error) { ctx.ui.notify(String(error), "error"); } } });
+  pi.registerCommand("mate-status", { description: "Show open local tasks without using model quota",
+    handler: async (_args, ctx) => { try { ctx.ui.notify(JSON.stringify(await rpc("status", { open_only: true }), null, 2), "info"); } catch (error) { ctx.ui.notify(String(error), "error"); } } });
   pi.registerCommand("mate-wake", { description: "Replay pending durable events", handler: async () => { delivered.clear(); await poll(generation); } });
   pi.registerCommand("mate-reconnect", { description: "Restart Mate's owned watcher/control plane", handler: async (_args, ctx) => { await activate(ctx); } });
 }

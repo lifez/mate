@@ -118,7 +118,7 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 ## Commands
 
 - `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
-- `/mate-status` — show tasks/events without invoking a model.
+- `/mate-status` — show open tasks and pending events without invoking a model.
 - `/mate-complete ID [--force]` — accept a stopped `review` task (`--force` also permits `failed`), then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
@@ -287,17 +287,22 @@ worker tab while confirming closure. Worktree/lease, reports, Pi session and cos
 records remain. Missing tabs or validation errors do not undo task completion.
 
 Closure and lease return are each journaled before their external operation. Lease
-return requires the exact saved path/ID/holder, a stopped worker, no unexpected
-worktree processes and a clean worktree; Mate never passes `--force`. Treehouse may
+return requires the exact saved path/ID/holder, a stopped worker and no unexpected
+worktree processes. If the worktree is dirty, the return dialog lists Git's exact
+porcelain-status entries and asks whether to discard those tracked changes and
+untracked files; a changed list refuses cleanup and requires confirmation again.
+Mate never passes `--force` to Treehouse. Treehouse may
 end a retained worker pane's idle shell and reuse/reset the pooled worktree, while
 the Git task branch and Mate reports/session/cost records remain. The slot stays
 visible in `treehouse status` as `available`; returning it does not shrink the pool.
-A lost/ambiguous
-response leaves the corresponding state uncertain and requires manual inspection,
-not automatic retry. Successful operations record their local account/time; repeats
+Tab closure is recorded as successful only after a structured `pane_not_found`
+response confirms the exact saved pane is gone; a lost close receipt is therefore
+safe only when this independent postcondition succeeds. Any still-present or unreadable
+endpoint, and ambiguous lease-return response, leaves the corresponding state uncertain
+and requires manual inspection, not automatic retry. Successful operations record their local account/time; repeats
 are no-ops. The footer counts only open (not `complete` or `cancelled`) tasks, across all task pages.
-Completed and cancelled tasks remain visible in `/mate-status` and cannot continue or reopen in this version;
-propose a new task if needed.
+Completed and cancelled tasks remain available through `mate_status` (including ID-specific inspection) and cannot continue or reopen in this version;
+`/mate-status` lists only open tasks. Propose a new task if needed.
 
 ## Calm mode
 
@@ -660,13 +665,25 @@ Reload the supervisor with workers stopped before using this path. No manual
 ### Continue after repairing a busy worker pane
 
 Keep the worker pane dedicated to Mate. Before every dispatch/continuation launch,
-Mate checks the original terminal identity, foreground process, shell children
-and shell process group (including background/stopped jobs). A shared TTY alone
-is not ownership: detached prompt helpers can retain it and are not rejected on
-that basis. Recovery still checks detached task/session and worktree processes. If Vite/Pi/another job is using it, no command or Ctrl-C is
-sent. An ordinary continuation rejected at preflight leaves its attempt/state intact.
-Launch commands explicitly enter the saved worktree root, even if the shell was
-left in a subdirectory. No worktree contents are changed by that `cd`.
+Mate checks the terminal identity, foreground process, shell children and shell
+process group (including background/stopped jobs). A shared TTY alone is not ownership:
+detached prompt helpers can retain it and are not rejected on that basis. Recovery
+still checks detached task/session and worktree processes. If Vite/Pi/another job is
+using it, no command or Ctrl-C is sent. An ordinary continuation rejected at preflight
+leaves its attempt/state intact. Launch commands explicitly enter the saved worktree
+root, even if the shell was left in a subdirectory. No worktree contents are changed
+by that `cd`.
+
+A host reboot may restore the same Herdr workspace/tab/pane with a new terminal ID.
+For a stopped `review`/`failed` task, `mate_continue` may rebind that one terminal
+incarnation only after the exact endpoint, Treehouse lease/holder, isolated
+worktree/repository/branch/base ancestry, worktree cwd, idle shell and sole-shell
+Treehouse process inventory all pass under the worker lock, with no task/worktree
+process evidence. The original endpoint receipt remains immutable; old/new terminal
+IDs are appended to `terminal_rebindings` before the next attempt. A busy pane,
+missing receipt, changed cwd/resource, extra process or unstable terminal still
+refuses without changing task state. This is not available to a generic `attention`
+crash and never reacquires, resets, cleans up or retries a submitted command.
 
 For an existing `attention: No worker lock after 60s` **continuation**, return the
 original pane to its shell yourself, then tell the supervisor it is fixed and ask
@@ -761,7 +778,8 @@ data/<id>/startup.log              private project setup output (never auto-deli
 ```
 
 `mate_status` returns 50 tasks per page (`task_offset`) and 50 pending events per
-batch. With `id`, it returns current state/settings/startup/error, the complete
+batch. `/mate-status` requests the same snapshot filtered to open tasks before
+pagination; model-tool status remains unfiltered for historical inspection. With `id`, it returns current state/settings/startup/error, the complete
 current brief and pending scope, `scope_revision`, `latest_scope` token/first_attempt,
 usage totals, selected `attempt_usage`, and the first report page when available.
 Cold scope/recovery/cancellation history, original brief, receipts and the full
