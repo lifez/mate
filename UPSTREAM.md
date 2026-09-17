@@ -248,8 +248,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   เมื่อ `agent_settled` แล้วเก็บ report/wake และคา Pi ไว้ idle ให้คุยต่อ;
   graceful exit เมื่อ human ยืนยัน completion หรือออกจาก Pi เอง
 - Mate-owned delivery policy: brief ที่ human approve และระบุ PR ชัดเจนอนุญาตให้ worker
-  push เฉพาะ assigned task branch และเปิด/อัปเดต PR นั้นได้; ยังไม่ทำ automatic cleanup,
-  automatic PR, merge/deploy, multi-harness หรือ supervisor ย่อย
+  push เฉพาะ assigned task branch และเปิด/อัปเดต PR นั้นได้; local merge เข้า assigned
+  task branch ทำได้ตาม scope แต่ห้าม merge GitHub/remote PR หรือเขียน target/base branch
+  โดยตรง; ยังไม่ทำ automatic cleanup, automatic PR/deploy, multi-harness หรือ supervisor ย่อย
 - Ambiguous launch/crash เก็บสถานะ attention ให้ตรวจ ไม่เสี่ยง auto-relaunch
 - Mate-owned recovery fix: initial preflight refusal from a shell background/stopped
   process can continue after the same fail-closed idle-pane/resource checks; legacy

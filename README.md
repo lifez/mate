@@ -128,7 +128,7 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 
 ## Commands
 
-- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR, and merge/deploy are never included.
+- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope; GitHub/remote PR merge and deploy are never included.
 - `/mate-status` — show open tasks and pending events without invoking a model.
 - `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits `failed`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
@@ -231,9 +231,10 @@ current scope, addition, repository, pinned base, branch and existing worktree.
   original attempts. Completion requires a new reviewed run covering the addition,
   not merely acceptance of the old report; stale scope confirmations are refused.
 - `complete`, active and `attention` tasks cannot be extended. Approval authorizes
-  push/PR only when the approved scope explicitly requests a PR; it never authorizes
-  merge/deploy or reopening completed tasks. Scope compliance remains an instruction
-  to trusted workers, not semantic enforcement of arbitrary continuation messages.
+  push/PR only when the approved scope explicitly requests a PR. Local merges into the
+  assigned task branch are allowed when required by scope; it never authorizes a
+  GitHub/remote PR merge, deploy or reopening completed tasks. Scope compliance remains
+  an instruction to trusted workers, not semantic enforcement of arbitrary continuation messages.
 
 After installing the change, reload/restart the supervisor **with workers stopped**
 to load both the new tool and control plane. Existing tasks need no database migration;
@@ -290,7 +291,7 @@ Mate, not an authenticated GitHub/person identity), and `completed_via`.
 Repeating the command preserves the original record. It is a human command, not
 a model tool; no model call is needed to accept a task.
 
-Completion itself does not acknowledge pending events, push/merge, return the
+Completion itself does not acknowledge pending events, remote push/PR merge, return the
 Treehouse lease or delete reports. Separate confirmations then offer to close the exact
 worker Herdr tab and return the exact Treehouse lease. Closing the only tab also removes
 a task workspace; sibling tabs keep it open. Those tabs must stop using the worktree
@@ -567,9 +568,10 @@ attempt rather than counting the saved session history again.
 - Base approval pins a commit; a moving branch does not change the approved base.
 - Treehouse lease ID/holder, Git common directory and exact Herdr endpoint IDs are checked.
 - Task branches are created without force/reset; pooled branches/commits are preserved.
-- No automatic push, PR publication, merge, deploy or pane cleanup. A worker may push
-  only its assigned task branch and open or update a PR when the human-approved scope
-  explicitly requires one. After `/mate-complete`, separate human confirmations can
+- No automatic push, PR publication, GitHub/remote PR merge, deploy or pane cleanup.
+  A worker may merge locally into its assigned task branch when required by scope. It
+  may push only its assigned task branch and open or update a PR when the human-approved
+  scope explicitly requires one. After `/mate-complete`, separate human confirmations can
   close an owned worker tab and return its exact clean Treehouse lease. Declining
   retains the resource; retained leases/worktrees count against Treehouse's pool capacity.
 - Worker reports are untrusted evidence, never instructions or human approval.

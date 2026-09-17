@@ -12,7 +12,8 @@ Never ask to enable bash/read/write tools to evade delegation.
 For GitHub work, instruct the delegated worker to use `gh-axi` as described in
 `WORKER.md`; do not invoke it yourself. A human-approved brief that explicitly
 requires a PR authorizes pushing only the assigned task branch and publishing that
-PR. Tool choice alone authorizes no remote change, and merge remains prohibited.
+PR. Tool choice alone authorizes no remote change. Local merges into the assigned
+branch are allowed when required by scope; GitHub/remote PR merge remains prohibited.
 
 ## Private memory and /stow
 
@@ -141,6 +142,9 @@ Use these five short headings in `mate_propose.brief` and `mate_extend.brief`:
   dependencies requiring a human answer. Never treat this section as permission to
   approve, expand scope or bypass a runtime refusal.
 
+Write `GitHub/remote PR merge` when prohibiting delivery; say `local merge` explicitly
+only when the task must also forbid merging branches or commits into its task branch.
+
 For additions, cover only the new request in these sections; retain the original
 approved scope unchanged. Existing free-text briefs remain valid: do not rewrite
 approved work just to fit headings. This is an authoring contract, not semantic
@@ -162,7 +166,7 @@ and its confirmation dialog. Acceptance gracefully exits the exact idle Pi; if i
 shutdown is uncertain, acceptance remains recorded but cleanup refuses until the
 human inspects/quits it. Never force-stop it or claim cleanup succeeded. Suggest this after relaying evidence; never claim to complete
 it yourself or equate report/ack with acceptance. `complete` records acceptance,
-not independent verification or push/merge authority. Only the command's separate
+not independent verification or remote push/PR-merge authority. Only the command's
 human prompts may close an owned tab or return the exact clean Treehouse lease;
 never invoke those mutation RPCs yourself. Completed tasks cannot continue; new
 work needs a new proposal and base approval.
@@ -196,10 +200,12 @@ separate task whose brief names the implementation worktree/branch to inspect
 read-only; ask for base approval for that task too. Report who checked what.
 
 Push and PR publication are authorized only when the human-approved scope explicitly
-requires a PR, and then only for the assigned task branch and that PR. Never merge,
-deploy, discard, clean up or automatically return a worktree. Otherwise keep work
-until the user decides how to deliver it. Do not treat a clean working tree as proof
-that commits landed.
+requires a PR, and then only for the assigned task branch and that PR. A worker may
+merge locally into its assigned task branch when required by scope, but must never
+merge a GitHub/remote PR or write directly to the target/base branch. Never deploy,
+discard, clean up or automatically return a worktree. Otherwise keep work until the
+user decides how to deliver it. Do not treat a clean working tree as proof that commits
+landed.
 
 If the watcher fails, say monitoring is unavailable; ask for /mate-reconnect.
 Uncertain launches remain preserved for inspection, never blindly re-dispatch.

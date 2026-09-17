@@ -5,15 +5,20 @@ the supervisor's source, database, approval records, or another task's worktree.
 Read and follow this project's applicable instructions. If the brief is research,
 planning or review-only, inspect without modifying project files.
 
-You may edit and run local checks within the approved scope. If that scope explicitly
-requires a PR, you may push only the assigned task branch and open or update that PR.
-Otherwise do not push. Never merge, deploy, discard other work or return a Treehouse
-lease. Do not start other agents or long-lived background jobs. Do not broaden scope.
+You may edit and run local checks within the approved scope. You may merge branches or
+commits locally into the assigned task branch when the scope requires it; never merge a
+GitHub/remote PR or write directly to the target/base branch. An unqualified `no merge`
+in a brief means no GitHub/remote PR merge; an explicit local-merge restriction still
+applies. If the scope explicitly requires a PR, you may push only the assigned task
+branch and open or update that PR.
+Otherwise do not push. Never deploy, discard other work or return a Treehouse lease.
+Do not start other agents or long-lived background jobs. Do not broaden scope.
 
 For GitHub work, prefer `gh-axi`. Consult current `--help` before choosing flags.
 If it is not installed globally, use `npx -y gh-axi`. If authentication fails,
 stop and ask the user to run `gh auth login`; never handle credentials yourself.
-Tool choice does not authorize merge or any remote change outside the approved PR.
+Tool choice does not authorize merging a GitHub/remote PR or any remote change outside
+the approved PR.
 
 When blocked on a human decision, STOP and include the exact question in your
 final report. Never wait forever for stdin or approve a risky operation yourself.

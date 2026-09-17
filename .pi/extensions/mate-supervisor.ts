@@ -376,14 +376,14 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         if (task.pending_scope) {
           if (!["review", "failed"].includes(task.state)) throw new Error("Only idle or stopped review/failed tasks can extend scope");
           const yes = await ctx.ui.confirm("Approve additional task scope?",
-            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR; no merge/deploy approval. Declining discards only this pending addition.`);
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope; no GitHub/remote PR merge or deploy approval. Declining discards only this pending addition.`);
           await rpc("review_scope", { id: task.id, token: task.pending_scope.token, attempt: task.attempt, sha: task.sha, approve: yes });
           ctx.ui.notify(yes ? "Additional scope approved; use mate_continue. No worker started." : "Pending addition discarded; approved scope unchanged", "info");
           await poll(generation); // Durable approval event also replays after a restart.
           return;
         }
         if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
-        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR; no merge/deploy approval is included.`);
+        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope; no GitHub/remote PR merge or deploy approval is included.`);
         if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
         await rpc("approve", { id: task.id, sha: task.sha, brief: task.brief });
         ctx.ui.notify(`Approved ${task.id}; supervisor dispatch pending. No worker started.`, "info");
@@ -408,11 +408,11 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
           }
           const warning = force ? `FORCE ACCEPTANCE from ${task.state}: the worker result may be incomplete. Accept responsibility for the existing work without another worker run. Error retained: ${task.error || "(none)"}\n\n` : "";
           const yes = await ctx.ui.confirm(force ? "Force accept task as complete?" : "Accept task as complete?",
-            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\n${warning}Confirm you have reviewed and accept this result. This records acceptance, not independent verification, and gracefully exits this task's idle Pi. Tab/worktree cleanup still needs separate confirmation. No push, merge or event acknowledgement. Completion cannot be reopened in this version.`);
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\n${warning}Confirm you have reviewed and accept this result. This records acceptance, not independent verification, and gracefully exits this task's idle Pi. Tab/worktree cleanup still needs separate confirmation. No remote push, PR merge or event acknowledgement. Completion cannot be reopened in this version.`);
           if (!yes) { ctx.ui.notify(`Not completed; task remains ${task.state}`, "info"); return; }
           task = await rpc("complete", { id: task.id, attempt: task.attempt, scope_revision: task.scope_history?.length ?? 0, force });
           pi.sendMessage({ customType: "mate-completed", display: true,
-            content: `Human accepted ${task.id} attempt ${task.attempt} as complete via ${task.completed_via}. Recorded local account: ${task.completed_by}. No push/merge/cleanup authorized without separate confirmation.` },
+            content: `Human accepted ${task.id} attempt ${task.attempt} as complete via ${task.completed_via}. Recorded local account: ${task.completed_by}. No remote push/PR merge/cleanup authorized without separate confirmation.` },
             { triggerTurn: false });
         }
         ctx.ui.notify(`${task.id} is complete`, "info");

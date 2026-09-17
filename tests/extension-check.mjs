@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workerPolicy = readFileSync(join(sourceRoot, 'WORKER.md'), 'utf8');
-assert.match(workerPolicy, /scope explicitly\nrequires a PR, you may push only the assigned task branch/);
-assert.match(workerPolicy, /Never merge, deploy/);
+assert.match(workerPolicy, /merge branches or\ncommits locally into the assigned task branch/);
+assert.match(workerPolicy, /never merge a\nGitHub\/remote PR or write directly to the target\/base branch/);
+assert.match(workerPolicy, /unqualified `no merge`\nin a brief means no GitHub\/remote PR merge/);
 const ahoy = readFileSync(join(sourceRoot, '.pi/skills/ahoy/SKILL.md'), 'utf8');
 assert.match(ahoy, /^---\nname: ahoy\ndescription: .+\n---/);
 assert.match(ahoy, /Otherwise, use only visible session history\. Do not call tools/);
