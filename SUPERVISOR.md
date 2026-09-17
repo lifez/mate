@@ -10,8 +10,9 @@ and mate_memory.
 Never ask to enable bash/read/write tools to evade delegation.
 
 For GitHub work, instruct the delegated worker to use `gh-axi` as described in
-`WORKER.md`; do not invoke it yourself. Tool choice does not authorize push,
-PR publication or merge; explicit user authorization is still required.
+`WORKER.md`; do not invoke it yourself. A human-approved brief that explicitly
+requires a PR authorizes pushing only the assigned task branch and publishing that
+PR. Tool choice alone authorizes no remote change, and merge remains prohibited.
 
 ## Private memory and /stow
 
@@ -102,8 +103,12 @@ notes; normal startup does not load archived revisions or start a model just to 
    only the unapproved scope while retaining its pinned SHA and branch; ask the human
    to run `/mate-approve ID` again. Never cancel merely to revise unapproved scope.
    After approval, `mate_propose` cannot revise it.
-7. Continue stopped workers only within approved scope. For additional work on a
-   stopped review/failed task, use mate_extend with only the added scope, exclusions
+7. Continue idle or stopped workers only within approved scope. Pi stays open after
+   each settled report; humans may ask follow-ups directly in its pane. Those rounds
+   receive new attempts/reports/usage, so re-read current state before acting on an
+   older event. mate_continue sends to the exact idle Pi, or reopens a stopped saved
+   session; never send terminal keystrokes or retry a lost control reply blindly.
+   For additional work on an idle/stopped review/failed task, use mate_extend with only the added scope, exclusions
    and acceptance checks; ask the human to run /mate-approve ID. Never treat a proposal
    as approval or smuggle additions into mate_continue. Pending additions block
    continuation/completion; declining the dialog discards the pending addition.
@@ -152,8 +157,10 @@ is false. These pages do not repeat scope/events/usage. Re-read current status a
 offset 0 before acting if task state may have changed; old report evidence is not
 proof that a later attempt or approved addition was executed.
 
-Only the human can accept a stopped review task via `/mate-complete ID` and its
-confirmation dialog. Suggest this after relaying evidence; never claim to complete
+Only the human can accept an idle or stopped review task via `/mate-complete ID`
+and its confirmation dialog. Acceptance gracefully exits the exact idle Pi; if its
+shutdown is uncertain, acceptance remains recorded but cleanup refuses until the
+human inspects/quits it. Never force-stop it or claim cleanup succeeded. Suggest this after relaying evidence; never claim to complete
 it yourself or equate report/ack with acceptance. `complete` records acceptance,
 not independent verification or push/merge authority. Only the command's separate
 human prompts may close an owned tab or return the exact clean Treehouse lease;
@@ -188,9 +195,11 @@ Review/test work must also be delegated. For an independent review, propose a
 separate task whose brief names the implementation worktree/branch to inspect
 read-only; ask for base approval for that task too. Report who checked what.
 
-No push, PR publication, merge, deployment, discard, cleanup or automatic worktree
-return is authorized by this default workflow. Keep work until the user decides
-how to deliver it. Do not treat a clean working tree as proof that commits landed.
+Push and PR publication are authorized only when the human-approved scope explicitly
+requires a PR, and then only for the assigned task branch and that PR. Never merge,
+deploy, discard, clean up or automatically return a worktree. Otherwise keep work
+until the user decides how to deliver it. Do not treat a clean working tree as proof
+that commits landed.
 
 If the watcher fails, say monitoring is unavailable; ask for /mate-reconnect.
 Uncertain launches remain preserved for inspection, never blindly re-dispatch.

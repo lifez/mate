@@ -1,3 +1,5 @@
+- Do not over engineer
+
 # Developing Mate
 
 Mate is an independent personal supervisor built on pi, Herdr and Treehouse.

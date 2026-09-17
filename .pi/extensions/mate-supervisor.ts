@@ -305,7 +305,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ id: Type.String(), repo: Type.String(), base: Type.Optional(Type.String()), brief: Type.String({ maxLength: 20000, description: "Five concise sections: User intent (faithful request/context), Mate spec (work and deliverable, including selected dispatch profile/rationale), Exclusions, Acceptance evidence (allowed checks and expected result), Stop conditions (blockers/questions). Preserve requested settings and restrictions; do not invent approval." }) }),
     async execute(_id, params) { return result(await rpc("propose", params)); } });
   registerTool({ name: "mate_extend", label: "Propose additional scope",
-    description: "Propose additional scope for a stopped review/failed task in its existing worktree/session. Use the same five brief sections as mate_propose, covering only the addition; do not repeat or rewrite approved scope. No approval or launch; ask the human to run /mate-approve ID, then use mate_continue. Same pending brief is idempotent; a different brief replaces the pending proposal. Cannot reopen complete tasks or change the base. Pending scope blocks continuation/completion until accepted or declined.",
+    description: "Propose additional scope for an idle or stopped review/failed task in its existing worktree/session. Use the same five brief sections as mate_propose, covering only the addition; do not repeat or rewrite approved scope. No approval or launch; ask the human to run /mate-approve ID, then use mate_continue. Same pending brief is idempotent; a different brief replaces the pending proposal. Cannot reopen complete tasks or change the base. Pending scope blocks continuation/completion until accepted or declined.",
     parameters: Type.Object({ id: Type.String(), brief: Type.String({ maxLength: 20000 }) }),
     async execute(_id, params) { return result(await rpc("propose_scope", params)); } });
   registerTool({ name: "mate_dispatch", label: "Dispatch approved task",
@@ -323,7 +323,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ events: Type.Array(Type.Integer({ minimum: 1 }), { minItems: 1, maxItems: 50 }), note: Type.String({ maxLength: 2000 }) }),
     async execute(_id, params) { return result(await rpc("ack", params)); } });
   registerTool({ name: "mate_continue", label: "Continue delegated task",
-    description: "Continue a stopped review/failed worker in its original worktree/session. If a reboot restored the exact stopped pane with a new terminal identity, Mate rebinds only after proving the exact lease/worktree/branch, worktree cwd, idle shell and absence of other worktree/task processes; the original receipt and rebind audit are retained. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), or an initial attempt-1 idle-shell/background-process preflight refusal before any command was sent, using a new attempt with retained history. Initial recovery requires no session/usage/execution artifacts and unchanged approved HEAD; it retains startup files and does not rerun startup. It observes up to 10 seconds: launch_confirmation started proves Pi process creation only, not completion or continued liveness; unconfirmed is not permission to retry. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
+    description: "Continue an idle or stopped review/failed worker in its original worktree/session. A resident Pi receives one native user message through its exact private control endpoint, not terminal keystrokes; a stopped worker reopens its saved session. Each settled round publishes a separate report/usage attempt while Pi stays open. Direct human pane follow-ups also create tracked rounds within approved scope. A lost control reply is uncertain: inspect status, never retry blindly. If a reboot restored the exact stopped pane with a new terminal identity, Mate rebinds only after proving the exact lease/worktree/branch, worktree cwd, idle shell and absence of other worktree/task processes; the original receipt and rebind audit are retained. After the human returns the original pane to its idle shell, this also inspects and recovers attention caused by an unstarted continuation (No worker lock after 60s), or an initial attempt-1 idle-shell/background-process preflight refusal before any command was sent, using a new attempt with retained history. Initial recovery requires no session/usage/execution artifacts and unchanged approved HEAD; it retains startup files and does not rerun startup. It observes up to 10 seconds: launch_confirmation started proves Pi process creation only, not completion or continued liveness; unconfirmed is not permission to retry. Runtime refuses execution evidence, possible orphan processes, changed identity or other uncertainty. Never force, clean up or send Ctrl-C. Optional model/effort overrides; omitted values retain saved settings. Approved scope only (including human-approved additions via mate_extend and /mate-approve); pending additions block continuation. Obtain human answers to blockers; do not retry refusals without resolving their cause.",
     parameters: Type.Object({ id: Type.String(), message: Type.String({ maxLength: 20000 }), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       const { tasks } = await rpc("status", { id: params.id });
@@ -374,23 +374,23 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         const { tasks } = await rpc("status", { id: args.trim(), history: true });
         const task = tasks[0];
         if (task.pending_scope) {
-          if (!["review", "failed"].includes(task.state)) throw new Error("Only stopped review/failed tasks can extend scope");
+          if (!["review", "failed"].includes(task.state)) throw new Error("Only idle or stopped review/failed tasks can extend scope");
           const yes = await ctx.ui.confirm("Approve additional task scope?",
-            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. No push/merge/deploy approval. Declining discards only this pending addition.`);
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR; no merge/deploy approval. Declining discards only this pending addition.`);
           await rpc("review_scope", { id: task.id, token: task.pending_scope.token, attempt: task.attempt, sha: task.sha, approve: yes });
           ctx.ui.notify(yes ? "Additional scope approved; use mate_continue. No worker started." : "Pending addition discarded; approved scope unchanged", "info");
           await poll(generation); // Durable approval event also replays after a restart.
           return;
         }
         if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
-        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? No push/merge/deploy approval is included.`);
+        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR; no merge/deploy approval is included.`);
         if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
         await rpc("approve", { id: task.id, sha: task.sha, brief: task.brief });
         ctx.ui.notify(`Approved ${task.id}; supervisor dispatch pending. No worker started.`, "info");
         await poll(generation); // Same durable delivery, correction and replay as scope approval.
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
-  pi.registerCommand("mate-complete", { description: "Human task acceptance: /mate-complete TASK_ID [--force] (also accepts stopped failed tasks)",
+  pi.registerCommand("mate-complete", { description: "Human task acceptance: /mate-complete TASK_ID [--force] (also accepts idle/stopped failed tasks)",
     handler: async (args, ctx) => {
       try {
         if (ctx.mode !== "tui") throw new Error("Human TUI confirmation required");
@@ -402,13 +402,13 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         const { tasks } = await rpc("status", { id, history: true });
         let task = tasks[0];
         if (task.state !== "complete") {
-          if (task.state !== "review" && !(force && task.state === "failed")) throw new Error("Only review tasks, or stopped failed tasks with --force, can be completed");
+          if (task.state !== "review" && !(force && task.state === "failed")) throw new Error("Only review tasks, or idle/stopped failed tasks with --force, can be completed");
           if (task.pending_scope || task.scope_history?.at(-1)?.first_attempt > task.attempt) {
             throw new Error("Additional scope awaits approval/execution; review its result before completion");
           }
           const warning = force ? `FORCE ACCEPTANCE from ${task.state}: the worker result may be incomplete. Accept responsibility for the existing work without another worker run. Error retained: ${task.error || "(none)"}\n\n` : "";
           const yes = await ctx.ui.confirm(force ? "Force accept task as complete?" : "Accept task as complete?",
-            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\n${warning}Confirm you have reviewed and accept this result. This records acceptance, not independent verification. No push, merge, event acknowledgement or resource cleanup. Completion cannot be reopened in this version.`);
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase: ${task.base} @ ${task.sha}\nWorktree: ${task.worktree}\n\n${task.brief}\n\n${warning}Confirm you have reviewed and accept this result. This records acceptance, not independent verification, and gracefully exits this task's idle Pi. Tab/worktree cleanup still needs separate confirmation. No push, merge or event acknowledgement. Completion cannot be reopened in this version.`);
           if (!yes) { ctx.ui.notify(`Not completed; task remains ${task.state}`, "info"); return; }
           task = await rpc("complete", { id: task.id, attempt: task.attempt, scope_revision: task.scope_history?.length ?? 0, force });
           pi.sendMessage({ customType: "mate-completed", display: true,
@@ -416,6 +416,10 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
             { triggerTurn: false });
         }
         ctx.ui.notify(`${task.id} is complete`, "info");
+        if (task.worker_control) {
+          ctx.ui.notify(`Acceptance saved, but Pi shutdown is unconfirmed: ${task.worker_stop_error || "inspect the worker"}. Quit/inspect it manually before cleanup; no automatic retry.`, "error");
+          return;
+        }
         if (task.same_tab_as) {
           ctx.ui.notify("Shared tab retained; returning the lease may end its worker pane shell", "info");
         } else if (task.tab_close_state !== "closed") {

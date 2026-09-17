@@ -1677,6 +1677,87 @@ print('fixture-private-output')
                 child.kill(); child.wait()
             child.stdout.close(); child.stderr.close()
 
+    def test_resident_rounds_gates_reports_and_live_continuation(self):
+        self.propose(); m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            task.update(state='running', worker_control=dict(socket='/unused', generation='fixture'))
+            with self.db: m.save(self.db, task)
+            with m.lock(self.home / 'fix/resident.lock'):
+                rounds = m.WorkerRounds(self.db, task, m.lock(self.home / 'fix/run.lock'))
+                try:
+                    rounds.last = dict(stopReason='stop', content=[dict(type='text', text='first evidence')])
+                    rounds.publish(); rounds.publish()
+                    first = m.snapshot(self.db, dict(id='fix'))
+                    self.assertTrue(first['tasks'][0]['worker_resident'])
+                    self.assertEqual([e['kind'] for e in first['events']].count('report'), 1)
+                    other = self.propose('other'); other['state'] = 'attention'
+                    with self.db: m.save(self.db, other)
+                    with self.assertRaisesRegex(ValueError, 'uncertain task'): rounds.admit({})
+                    other['state'] = 'running'
+                    with self.db: m.save(self.db, other)
+                    self.config.write_text('{"worker":{"max_active":1}}')
+                    with self.assertRaisesRegex(ValueError, 'already active'): rounds.admit({})
+                    other['state'] = 'complete'
+                    with self.db: m.save(self.db, other)
+                    pending = m.propose_scope(self.db, dict(id='fix', brief='Extra check'))['pending_scope']
+                    with self.assertRaisesRegex(ValueError, 'awaits human'): rounds.admit({})
+                    m.review_scope(self.db, dict(id='fix', attempt=1, sha=self.sha, token=pending['token'], approve=True))
+                    with patch.object(m, 'worker_control', return_value={'ok': True}) as control:
+                        continued = m.resume(self.db, dict(id='fix', message='Inspect extra check'))
+                    self.assertEqual(self.launches, 1, 'no pane command or new Pi process')
+                    self.assertEqual(continued['attempt'], 2)
+                    self.assertEqual(control.call_args.args[1], 'continue')
+                    with self.assertRaisesRegex(ValueError, 'reserved'): rounds.admit({})
+                    result = rounds.admit(dict(request=continued['worker_pending']))
+                    self.assertIn('Extra check', result['brief'])
+                    self.assertEqual(result['attempt'], 2)
+                    self.assertEqual(rounds.admit({})['attempt'], 2, 'queued/retry runs share one unsettled attempt')
+                    with self.assertRaises((ValueError, BlockingIOError)):
+                        m.complete(self.db, dict(id='fix', attempt=2, scope_revision=1))
+                    rounds.last = dict(stopReason='stop', content=[dict(type='text', text='second evidence')])
+                    rounds.publish()
+                    self.assertEqual((self.home / 'fix/report-1.txt').read_text(), 'first evidence')
+                    with self.assertRaises(ValueError): m.complete(self.db, dict(id='fix', attempt=1, scope_revision=1))
+                    # Lease/terminal mismatches refuse admission before incrementing the attempt.
+                    self.leases[0]['lease_holder'] = 'foreign'
+                    with self.assertRaisesRegex(ValueError, 'exact lease'): rounds.admit({})
+                    self.leases[0]['lease_holder'] = task['holder']
+                    self.assertEqual(m.load(self.db, 'fix')['attempt'], 2)
+                    with patch.object(m, 'worker_control', side_effect=TimeoutError('lost shutdown reply')):
+                        completed = m.complete(self.db, dict(id='fix', attempt=2, scope_revision=1))
+                    self.assertEqual(completed['state'], 'complete')
+                    self.assertIn('lost shutdown', completed['worker_stop_error'])
+                    with self.assertRaisesRegex(ValueError, 'not available'): rounds.admit({})
+                    with self.assertRaisesRegex(ValueError, 'shutdown is not confirmed'):
+                        m.close_tab(self.db, dict(id='fix', attempt=2, tab=task['tab']))
+                    self.assertEqual((self.home / 'fix/report-2.txt').read_text(), 'second evidence')
+                finally:
+                    if rounds.guard: rounds.guard.close()
+
+    def test_resident_missing_owner_and_lost_continue_reply_fail_closed(self):
+        self.propose(); m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            task.update(state='review', worker_control=dict(socket='/unused', generation='fixture'))
+            with self.db: m.save(self.db, task)
+            for action, params in [(m.resume, dict(id='fix', message='Again')),
+                                   (m.complete, dict(id='fix', attempt=1)),
+                                   (m.propose_scope, dict(id='fix', brief='Extra'))]:
+                with self.assertRaisesRegex(ValueError, 'ownership is missing'): action(self.db, params)
+            with m.lock(self.home / 'fix/resident.lock'):
+                with patch.object(m, 'worker_control', side_effect=TimeoutError('lost reply')):
+                    with self.assertRaises(TimeoutError): m.resume(self.db, dict(id='fix', message='Again'))
+                current = m.load(self.db, 'fix')
+                self.assertEqual(current['state'], 'attention')
+                self.assertEqual(current['attempt'], 2)
+                self.assertTrue(current['worker_pending'])
+                with self.assertRaises(ValueError): m.resume(self.db, dict(id='fix', message='Do not retry'))
+            m.reconcile(self.db)
+            self.assertEqual(m.load(self.db, 'fix')['state'], 'attention')
+            self.assertIn('Resident worker disappeared', m.load(self.db, 'fix')['error'])
+            self.assertEqual(self.launches, 1)
+
     def test_worker_report_and_zero_exit_provider_error(self):
         brief = ('## User intent\nตรวจ fixture โดยไม่แก้โค้ด\n'
                  '## Mate spec\nInspect fixture; return evidence.\n'

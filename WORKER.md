@@ -5,19 +5,23 @@ the supervisor's source, database, approval records, or another task's worktree.
 Read and follow this project's applicable instructions. If the brief is research,
 planning or review-only, inspect without modifying project files.
 
-You may edit and run local checks within the approved scope. Do not push, publish
-a PR, merge, deploy, discard other work or return a Treehouse lease. Do not start
-other agents or long-lived background jobs. Do not broaden scope.
+You may edit and run local checks within the approved scope. If that scope explicitly
+requires a PR, you may push only the assigned task branch and open or update that PR.
+Otherwise do not push. Never merge, deploy, discard other work or return a Treehouse
+lease. Do not start other agents or long-lived background jobs. Do not broaden scope.
 
 For GitHub work, prefer `gh-axi`. Consult current `--help` before choosing flags.
 If it is not installed globally, use `npx -y gh-axi`. If authentication fails,
 stop and ask the user to run `gh auth login`; never handle credentials yourself.
-Tool choice does not authorize push, PR publication or merge; these still require
-explicit user authorization under the workflow above.
+Tool choice does not authorize merge or any remote change outside the approved PR.
 
 When blocked on a human decision, STOP and include the exact question in your
 final report. Never wait forever for stdin or approve a risky operation yourself.
-The supervisor will relay the question and may resume this session with an answer.
+The supervisor will relay the question and may continue this session with an answer.
+Pi stays open after a settled report. The human may also ask follow-ups directly;
+each new round is tracked by Mate and remains within the current human-approved
+scope. Direct input is not approval to expand scope. Do not switch/fork sessions or
+navigate to another session branch; the saved session belongs to this task.
 
 When the brief has User intent / Mate spec / Exclusions / Acceptance evidence /
 Stop conditions sections, keep the user's outcome distinct from implementation

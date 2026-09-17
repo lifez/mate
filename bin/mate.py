@@ -13,9 +13,11 @@ import selectors
 import shlex
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -103,6 +105,44 @@ def worker_alive(task):
         return True
     handle.close()
     return False
+
+
+def resident_alive(task):
+    if not task.get("worker_control"):
+        return False
+    try:
+        handle = lock(HOME / task["id"] / "resident.lock")
+    except BlockingIOError:
+        return True
+    handle.close()
+    return False
+
+
+def check_resident(task):
+    if not resident_alive(task):
+        raise ValueError("Resident worker ownership is missing; inspect possible orphan Pi, do not relaunch")
+    pane = check_endpoint(task, task["pane"])
+    if not terminal_id(task) or pane.get("terminal_id") != terminal_id(task):
+        raise ValueError("Worker terminal identity changed")
+    check_lease(task)
+
+
+def worker_control(task, action, **params):
+    """One submission to the exact private Pi endpoint. Never retry on a lost reply."""
+    control = task["worker_control"]
+    request = dict(action=action, generation=control["generation"], attempt=task["attempt"], **params)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(20)
+        conn.connect(control["socket"])
+        conn.sendall((json.dumps(request) + "\n").encode())
+        with conn.makefile("rb") as stream:
+            line = stream.readline(65537)
+        if len(line) > 65536 or not line.endswith(b"\n"):
+            raise ValueError("Invalid worker control reply")
+        reply = json.loads(line)
+    if reply.get("generation") != control["generation"] or reply.get("attempt") != task["attempt"] or reply.get("ok") is not True:
+        raise ValueError(reply.get("error", "Worker control identity mismatch"))
+    return reply
 
 
 def herdr(task, *args):
@@ -376,6 +416,10 @@ def propose_scope(db, p):
     if task["state"] not in ("review", "failed"):
         raise ValueError("Only a stopped review/failed task can extend scope")
     with lock(HOME / task["id"] / "run.lock"):
+        if task.get("worker_control"):
+            check_resident(task)
+        if load(db, task["id"]) != task:
+            raise ValueError("Task changed during scope checks")
         addition = text(p["brief"], "additional scope")
         text(task["brief"] + "\n\nAdditional approved scope:\n" + addition, "combined scope")
         if task.get("pending_scope", {}).get("brief") == addition:
@@ -397,6 +441,10 @@ def review_scope(db, p):
         p.get("sha") != task["sha"] or type(p.get("approve")) is not bool):
         raise ValueError("Scope confirmation no longer matches the pending task")
     with lock(HOME / task["id"] / "run.lock"):
+        if task.get("worker_control"):
+            check_resident(task)
+        if load(db, task["id"]) != task:
+            raise ValueError("Task changed during scope checks")
         if p["approve"]:
             brief = text(task["brief"] + "\n\nAdditional approved scope:\n" + pending["brief"], "combined scope")
             task.setdefault("original_brief", task["brief"])
@@ -480,10 +528,12 @@ def dispatch(db, p):
         raise ValueError("pi is not on PATH")
     if not task.get("recoveries"):
         task.update(project=project.get("name"), startup=project.get("startup"))
-    (HOME / task["id"]).mkdir(mode=0o700, exist_ok=bool(task.get("recoveries")))
     task.update(pi_binary=pi_binary, **profile, state="acquiring",
                 attempt=task["attempt"] + 1, holder=f"mate:{uuid.uuid4().hex}")
     with db:
+        db.execute("BEGIN IMMEDIATE")
+        check_capacity(db)  # Native pane inputs can now compete with supervisor dispatch.
+        (HOME / task["id"]).mkdir(mode=0o700, exist_ok=bool(task.get("recoveries")))
         save(db, task)  # Journal before non-transactional external acquire.
     try:
         lease = json.loads(run(["treehouse", "get", "--lease", "--json", "--lease-holder", task["holder"]],
@@ -1058,6 +1108,8 @@ def resume(db, p):
     with lock(HOME / task["id"] / "run.lock"):
         if recovering:
             initial = inspect_missing_launch(db, task)
+        elif task.get("worker_control"):
+            check_resident(task)
         else:
             try:
                 ready_pane(task)
@@ -1068,6 +1120,8 @@ def resume(db, p):
         if load(db, task["id"]) != task:
             raise ValueError("Task changed during continuation checks")
         with db:
+            db.execute("BEGIN IMMEDIATE")
+            check_capacity(db, inspected=task["id"] if recovering else None)
             if terminal_rebind:
                 task.setdefault("terminal_rebindings", []).append(terminal_rebind)
                 task["terminal_id"] = terminal_rebind["new_terminal_id"]
@@ -1081,14 +1135,23 @@ def resume(db, p):
             if initial:
                 message = task["brief"] + "\n\nRecovery instructions (within approved scope only):\n" + message
             task.update(attempt=task["attempt"] + 1, state="launching", followup=message, **profile)
+            if task.get("worker_control"):
+                task["worker_pending"] = uuid.uuid4().hex
             task.pop("launch_stage", None)
             task.pop("error", None)
             task.pop("missing_from", None)
             save(db, task)
     try:
-        launch_worker(task)
+        if task.get("worker_control"):
+            worker_control(task, "continue", request=task["worker_pending"], message=message, **profile)
+        else:
+            launch_worker(task)
     except Exception as exc:
         with db:
+            current = load(db, task["id"])
+            if current.get("worker_pending") == task.get("worker_pending") and task.get("worker_pending"):
+                current.update(state="attention", error=f"Resident continuation uncertain: {exc}")
+                save(db, current)
             event(db, task, "launch-uncertain", str(exc))
         raise
     return confirm_recovered_worker(db, task) if initial else load(db, task["id"])
@@ -1113,7 +1176,9 @@ def complete(db, p):
     except BlockingIOError:
         raise ValueError("Worker is still active; wait before completing the task") from None
     try:
-        if force:
+        if task.get("worker_control"):
+            check_resident(task)
+        elif force:
             ready_pane(task)
             check_lease(task)
         if load(db, task["id"]) != task:
@@ -1127,6 +1192,20 @@ def complete(db, p):
             save(db, task)
     finally:
         guard.close()
+    if task.get("worker_control"):
+        try:
+            worker_control(task, "shutdown")
+            deadline = time.monotonic() + 10
+            while resident_alive(task) and time.monotonic() < deadline:
+                time.sleep(.05)
+            if resident_alive(task):
+                raise ValueError("Pi shutdown unconfirmed; inspect/quit manually before cleanup")
+        except Exception as exc:
+            with db:
+                task = load(db, task["id"])
+                task["worker_stop_error"] = str(exc)
+                save(db, task)  # Acceptance remains durable even if shutdown fails.
+        return load(db, task["id"])
     return task  # No acknowledgement, resource cleanup, or Git operations.
 
 
@@ -1157,6 +1236,8 @@ def return_lease(db, p):
     except BlockingIOError:
         raise ValueError('Worker is still active; cannot return its lease') from None
     try:
+        if task.get("worker_control"):
+            raise ValueError("Pi shutdown is not confirmed; quit/inspect before returning its lease")
         current_lease = check_lease(task)
         if task.get('tab_close_state') == 'closed':
             if current_lease.get('processes') != []:
@@ -1225,6 +1306,8 @@ def close_tab(db, p):
     except BlockingIOError:
         raise ValueError('Worker is still active; cannot close its tab') from None
     try:
+        if task.get("worker_control"):
+            raise ValueError("Pi shutdown is not confirmed; quit/inspect before closing its tab")
         pane = check_endpoint(task, task['pane'])
         original = terminal_id(task)
         if not original or pane.get('terminal_id') != original:
@@ -1350,19 +1433,19 @@ def snapshot(db, p):
             return result
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope"))} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope")), "worker_resident": resident_alive(t)} for t in result["tasks"]]
     else:
         fields = ("id", "state", "updated", "repo", "base", "base_branch", "sha", "branch", "brief",
                   "attempt", "approved_at", "provider", "model", "effort", "worktree",
                   "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab",
-                  "same_tab_as", "error", "missing_from", "launch_stage", "pending_scope",
+                  "same_tab_as", "error", "missing_from", "launch_stage", "pending_scope", "worker_stop_error",
                   "startup", "startup_state", "startup_started_at", "startup_finished_at", "startup_pid", "startup_exit_code",
                   "completed_at", "completed_by", "completed_via", "completed_from",
                   "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_close_error",
                   "tab_closed_at", "tab_closed_by")
         current = dict(task) if history else {k: task[k] for k in fields if k in task}
         scopes = task.get("scope_history", [])
-        current.update(usage_total=usage_total(task), scope_revision=len(scopes))
+        current.update(usage_total=usage_total(task), scope_revision=len(scopes), worker_resident=resident_alive(task))
         if scopes:
             current["latest_scope"] = {k: scopes[-1][k] for k in ("token", "first_attempt", "approved_at") if k in scopes[-1]}
         result["tasks"] = [current]
@@ -1414,6 +1497,16 @@ def acknowledge(db, p):
 
 def reconcile(db):
     for task in tasks(db):
+        if task.get("worker_control") and not resident_alive(task):
+            with db:
+                current = load(db, task["id"])
+                if current.get("worker_control") == task["worker_control"]:
+                    current["error"] = "Resident worker disappeared; inspect possible orphan Pi. No automatic relaunch."
+                    if current["state"] != "complete":
+                        current["state"] = "attention"
+                    save(db, current)
+                    event(db, current, "worker-missing", current["error"])
+            continue
         if task["state"] not in ("acquiring", "launching", "running"):
             continue
         if time.time() - task["updated"] < 60:
@@ -1545,10 +1638,91 @@ def serve():
         db.close()
 
 
+class WorkerRounds:
+    """One resident Pi, one held run.lock and durable report per settled attempt."""
+    def __init__(self, db, task, guard):
+        self.db, self.ident, self.attempt = db, task["id"], task["attempt"]
+        self.control, self.guard = task["worker_control"], guard
+        self.last, self.settled = {}, False
+
+    def admit(self, item):
+        # A synchronous pipe reply gates Pi input before it can call a model/tool.
+        task = load(self.db, self.ident)
+        if task.get("worker_control") != self.control:
+            raise ValueError("Stale resident worker generation")
+        if self.guard is not None:
+            if task["state"] != "running" or task["attempt"] != self.attempt:
+                raise ValueError("Worker attempt changed")
+            return dict(attempt=self.attempt, brief=task["brief"])
+        guard = lock(HOME / self.ident / "run.lock")
+        try:
+            check_resident(task)
+            # Serialize fleet admission by native inputs in different worker panes.
+            self.db.execute("BEGIN IMMEDIATE")
+            task = load(self.db, self.ident)
+            reserved = bool(task.get("worker_pending"))
+            if task.get("pending_scope"):
+                raise ValueError("Additional scope awaits human /mate-approve")
+            if reserved:
+                if (task["state"] != "launching" or item.get("request") != task["worker_pending"] or
+                        task["attempt"] != self.attempt + 1):
+                    raise ValueError("Continuation is reserved or uncertain; inspect before sending more input")
+            else:
+                if task["state"] not in ("review", "failed") or task["attempt"] != self.attempt:
+                    raise ValueError("Task is not available for another round")
+                check_capacity(self.db)
+                task["attempt"] += 1
+            profile = worker_profile(item, task)
+            if reserved and profile != worker_profile({}, task):
+                raise ValueError("Pi profile differs from the reserved continuation")
+            task.update(state="running", **profile)
+            task.pop("worker_pending", None)
+            task.pop("error", None)
+            task.setdefault("usage", {})[str(task["attempt"])] = empty_usage()
+            save(self.db, task)
+            self.db.commit()
+            self.attempt, self.last, self.settled = task["attempt"], {}, False
+            self.guard, guard = guard, None
+            return dict(attempt=self.attempt, brief=task["brief"])
+        except Exception:
+            self.db.rollback()
+            raise
+        finally:
+            if guard is not None:
+                guard.close()
+
+    def publish(self, error="", uncertain=False):
+        if self.guard is None:
+            return  # Duplicate settled notification, not a new outcome.
+        task = load(self.db, self.ident)
+        if task["attempt"] != self.attempt or task.get("worker_control") != self.control or task["state"] != "running":
+            raise ValueError("Stale worker outcome")
+        report = "\n".join(p.get("text", "") for p in self.last.get("content", []) if p.get("type") == "text")
+        if not error and self.last.get("stopReason") != "stop":
+            error = f"Pi stopReason={self.last.get('stopReason')}: {self.last.get('errorMessage', '')}"
+        if not report.strip() and not error:
+            error = "Pi settled without a final text report"
+        folder = HOME / self.ident
+        path = folder / f"report-{self.attempt}.txt"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text((error + "\n\n" if error else "") + report)
+        temporary.replace(path)  # Publish complete report before its durable event.
+        with self.db:
+            task.update(state="attention" if uncertain else "failed" if error else "review", error=error)
+            save(self.db, task)
+            event(self.db, task, "worker-missing" if uncertain else "failed" if error else "report",
+                  error or "Worker report available; Pi remains idle. Not verified completion.")
+        self.settled = True
+        self.guard.close()
+        self.guard = None
+
+
 def worker(ident, attempt):
     db = connect()
     task = load(db, ident)
+    resident = lock(HOME / ident / "resident.lock")
     guard = lock(HOME / ident / "run.lock")
+    control_dir = tempfile.TemporaryDirectory(prefix="mate-pi-", dir="/tmp")
     with db:
         task = load(db, ident)
         if task["attempt"] != attempt or task["state"] != "launching":
@@ -1558,9 +1732,13 @@ def worker(ident, attempt):
         check_lease(task)
         if str(Path.cwd().resolve()) != task["worktree"]:
             raise ValueError("Worker cwd differs from its leased worktree")
-        task["state"] = "running"
+        if task.get("worker_control"):
+            raise ValueError("Previous resident worker shutdown is uncertain")
+        task.update(state="running", worker_control=dict(
+            socket=str(Path(control_dir.name) / "pi.sock"), generation=uuid.uuid4().hex))
         task.setdefault("usage", {}).setdefault(str(attempt), empty_usage())
         save(db, task)
+    rounds = WorkerRounds(db, task, guard)
     folder = HOME / ident
     session = folder / "session.jsonl"
     prompt = task.get("followup", task["brief"])
@@ -1575,25 +1753,30 @@ def worker(ident, attempt):
         args += ["--thinking", worker_profile(task)["effort"]]
     args += ["--", prompt]
     child = None
-    last = {}
     error = ""
-    settled = False
     uncertain = False
     read_fd, write_fd = os.pipe()
+    reply_read, reply_write = os.pipe()
     try:
         # Keep stdin/stdout and the foreground process group attached to Herdr's TTY.
         # The private pipe carries events only; never parse or suppress Pi's terminal UI.
-        with os.fdopen(read_fd) as stream, (folder / f"events-{attempt}.jsonl").open("w") as log, (folder / f"stderr-{attempt}.log").open("w") as err:
+        with os.fdopen(read_fd) as stream, os.fdopen(reply_write, "w") as replies, (folder / f"stderr-{attempt}.log").open("w") as err:
             try:
                 child = subprocess.Popen(args, cwd=task["worktree"], stderr=err,
                                          # Reuse Mate's no-supervisor mode; other extensions/skills still load.
-                                         env=dict(os.environ, MATE_MODE="dev", MATE_EVENT_FD=str(write_fd)), pass_fds=(write_fd,))
+                                         env=dict(os.environ, MATE_MODE="dev", MATE_EVENT_FD=str(write_fd),
+                                                  MATE_REPLY_FD=str(reply_read), MATE_WORKER_CONTROL=json.dumps(task["worker_control"]),
+                                                  MATE_SESSION_FILE=str(session), MATE_ATTEMPT=str(attempt)),
+                                         pass_fds=(write_fd, reply_read))
                 if task.get("launch_recoveries"):
                     with db:
                         event(db, task, "worker-started", "Pi process started in the saved endpoint/worktree; not verified completion.")
             finally:
                 os.close(write_fd)
+                os.close(reply_read)
             def stop(_sig, _frame):
+                nonlocal uncertain
+                uncertain = True
                 if child.poll() is None:
                     child.terminate()
                 raise InterruptedError("Worker interrupted")
@@ -1602,27 +1785,40 @@ def worker(ident, attempt):
             for line in iter(lambda: stream.readline(4 * 1024 * 1024 + 1), ""):
                 if len(line) > 4 * 1024 * 1024:
                     raise ValueError("Pi JSON event exceeded 4 MiB; see worker log")
-                log.write(line)
-                log.flush()
-                try:
-                    item = json.loads(line)
-                except ValueError:
+                item = json.loads(line)
+                if item.get("type") == "mate_admit":
+                    try:
+                        reply = dict(ok=True, **rounds.admit(item))
+                    except (ValueError, RuntimeError, OSError) as exc:
+                        reply = dict(ok=False, error=str(exc))
+                    replies.write(json.dumps(reply) + "\n")
+                    replies.flush()
                     continue
+                with (folder / f"events-{rounds.attempt}.jsonl").open("a") as log:
+                    log.write(line)
                 if item.get("type") == "message_end" and item.get("message", {}).get("role") == "assistant":
-                    last = item["message"]
-                    record_usage(db, ident, attempt, last)
+                    if rounds.guard is None:
+                        raise ValueError("Assistant output outside an admitted worker round")
+                    rounds.last = item["message"]
+                    record_usage(db, ident, rounds.attempt, rounds.last)
                 if item.get("type") == "agent_settled":
-                    settled = True
+                    rounds.publish()
+                    if item.get("reply"):
+                        replies.write(json.dumps(dict(ok=True, attempt=rounds.attempt)) + "\n")
+                        replies.flush()
                 elif item.get("type") == "agent_start":
-                    settled = False
+                    if rounds.guard is None:
+                        raise ValueError("Pi started without admission")
+                    rounds.settled = False
             code = child.wait()
             uncertain = code < 0  # A signal-killed Pi may have left tool subprocesses behind.
-            if code or not settled or last.get("stopReason") != "stop":
-                error = f"Pi exit={code}, settled={settled}, stopReason={last.get('stopReason')}: {last.get('errorMessage', '')}. See stderr-{attempt}.log"
+            if code or not rounds.settled:
+                error = f"Pi exit={code}, settled={rounds.settled}, stopReason={rounds.last.get('stopReason')}: {rounds.last.get('errorMessage', '')}. See stderr-{attempt}.log"
     except Exception as exc:
         error = str(exc)
     finally:
         if child and child.poll() is None:
+            uncertain = True
             child.terminate()
             try:
                 child.wait(timeout=5)
@@ -1632,17 +1828,22 @@ def worker(ident, attempt):
                 uncertain = True
         if uncertain:
             error += " Pi was forcibly terminated; inspect pane/processes before any continuation."
-        report = "\n".join(part.get("text", "") for part in last.get("content", []) if part.get("type") == "text")
-        if not report.strip() and not error:
-            error = "Pi exited without a final text report"
-        (folder / f"report-{attempt}.txt").write_text((error + "\n\n" if error else "") + report)
-        with db:
+        unfinished = rounds.guard is not None
+        if unfinished:
+            rounds.publish(error, uncertain)
+        # Idle exit must not overwrite an already published report or human acceptance.
+        with lock(folder / "run.lock", blocking=True), db:
             current = load(db, ident)
-            if current["attempt"] == attempt:
-                current.update(state="attention" if uncertain else "failed" if error else "review", error=error)
+            if current.get("worker_control") == task["worker_control"]:
+                if (error and not unfinished) or current.get("worker_pending"):
+                    current["error"] = error or "Pi exited before accepting its reserved continuation"
+                    if current["state"] != "complete":
+                        current["state"] = "attention" if uncertain or current.get("worker_pending") else "failed"
+                    event(db, current, "worker-exit", current["error"])
+                del current["worker_control"]
                 save(db, current)
-                event(db, current, "worker-missing" if uncertain else "failed" if error else "report", error or "Worker report available; not verified completion.")
-        guard.close()
+        control_dir.cleanup()
+        resident.close()
         db.close()
     if error:
         print(f"\n[Mate: {error}]", flush=True)

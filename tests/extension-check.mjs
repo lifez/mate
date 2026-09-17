@@ -7,6 +7,9 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const workerPolicy = readFileSync(join(sourceRoot, 'WORKER.md'), 'utf8');
+assert.match(workerPolicy, /scope explicitly\nrequires a PR, you may push only the assigned task branch/);
+assert.match(workerPolicy, /Never merge, deploy/);
 const ahoy = readFileSync(join(sourceRoot, '.pi/skills/ahoy/SKILL.md'), 'utf8');
 assert.match(ahoy, /^---\nname: ahoy\ndescription: .+\n---/);
 assert.match(ahoy, /Otherwise, use only visible session history\. Do not call tools/);
@@ -101,13 +104,22 @@ try {
   const { default: bridge } = await jiti.import(join(root, 'bin/worker-events.ts'));
   const bridgeHandlers = {}, bridgeFile = join(tmp, 'bridge.jsonl');
   const fd = openSync(bridgeFile, 'w', 0o600);
-  const priorDescriptor = process.env.MATE_EVENT_FD;
+  const bridgeEnv = Object.fromEntries(['MATE_EVENT_FD', 'MATE_REPLY_FD', 'MATE_WORKER_CONTROL', 'MATE_SESSION_FILE', 'MATE_ATTEMPT'].map(key => [key, process.env[key]]));
+  const repliesFile = join(tmp, 'bridge-replies');
+  writeFileSync(repliesFile, [JSON.stringify({ ok: true, attempt: 1, brief: 'Fixture scope' }), JSON.stringify({ ok: true, attempt: 1 })].map(line => line.padEnd(4095) + '\n').join(''));
+  const replyFd = openSync(repliesFile, 'r');
   let shutdowns = 0, aborted = false, idle = false, queued = false;
   const bridgeCtx = { ui: { notify() {} }, isIdle: () => idle, hasPendingMessages: () => queued,
+    sessionManager: { getSessionFile: () => join(tmp, 'fixture.jsonl') }, model: { provider: 'fixture', id: 'fixture' },
     shutdown: () => { shutdowns++; }, abort: () => { aborted = true; } };
   try {
     process.env.MATE_EVENT_FD = String(fd);
-    bridge({ on: (name, handler) => { bridgeHandlers[name] = handler; } });
+    process.env.MATE_REPLY_FD = String(replyFd);
+    process.env.MATE_SESSION_FILE = join(tmp, 'fixture.jsonl');
+    process.env.MATE_WORKER_CONTROL = JSON.stringify({ socket: join(tmp, 'unused.sock'), generation: 'fixture' });
+    process.env.MATE_ATTEMPT = '1';
+    bridge({ on: (name, handler) => { bridgeHandlers[name] = handler; }, getThinkingLevel: () => 'off' });
+    bridgeHandlers.agent_start({ type: 'agent_start' }, bridgeCtx);
     assert.equal(bridgeHandlers.agent_end, undefined, 'do not terminate retries at low-level agent_end');
     bridgeHandlers.agent_settled({ type: 'agent_settled' }, bridgeCtx);
     assert.equal(shutdowns, 0, 'ignore unsettled agent');
@@ -117,16 +129,21 @@ try {
     queued = false;
     bridgeHandlers.message_end({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, bridgeCtx);
     bridgeHandlers.agent_settled({ type: 'agent_settled' }, bridgeCtx);
-    assert.equal(shutdowns, 1);
+    assert.equal(shutdowns, 0, 'settled publishes a report without exiting Pi');
+    assert.deepEqual(bridgeHandlers.session_before_switch({}, bridgeCtx), { cancel: true });
+    assert.deepEqual(bridgeHandlers.session_before_fork({}, bridgeCtx), { cancel: true });
+    assert.deepEqual(bridgeHandlers.session_before_tree({}, bridgeCtx), { cancel: true });
+    assert.equal(bridgeHandlers.user_bash().result.exitCode, 1, 'no untracked shell mutation');
     assert.equal(JSON.parse(readFileSync(bridgeFile, 'utf8').trim().split('\n').at(-1)).type, 'agent_settled');
     bridgeHandlers.message_update({ text: 'x'.repeat(4 * 1024 * 1024) }, bridgeCtx);
     assert.equal(aborted, true, 'bridge failure must abort instead of silently losing reports');
     assert.equal(process.exitCode, 1);
     process.exitCode = 0;
   } finally {
-    closeSync(fd);
-    if (priorDescriptor === undefined) delete process.env.MATE_EVENT_FD;
-    else process.env.MATE_EVENT_FD = priorDescriptor;
+    closeSync(fd); closeSync(replyFd);
+    for (const [key, value] of Object.entries(bridgeEnv)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
   assert.deepEqual(workerProfile(ctx, {}), { provider: 'openai-codex', model: 'main-model', effort: 'high' });
   assert.deepEqual(workerProfile(ctx, { model: 'worker-model', effort: 'xhigh' }), { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });

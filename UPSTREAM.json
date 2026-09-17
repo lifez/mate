@@ -166,6 +166,15 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R03", "R04", "R05", "R06"],
+      "description": "Mate-owned persistent Pi worker lifecycle: publish reports/events per settled round without exiting; native and supervisor follow-ups retain the same Pi/session with per-round usage. Separate resident/round locks, synchronous admission reply pipe and private generation/attempt-fenced control socket preserve scope, capacity, endpoint/lease, human completion and cleanup gates. Human acceptance gracefully exits idle Pi; lost replies/missing owners fail closed without retry or forced stop. Legacy stopped sessions still reopen. No schema migration or upstream code copied; original provenance snapshots retained.",
+      "source_commit": "b430bf50d9aea5d1a810cab1bd293670bbca64be",
+      "reviewed_scope": "Selected fm-spawn.sh Pi bridge agent_start busy and agent_settled idle behavior, no shutdown; reference-only, no full component audit or fetch.",
+      "sources": [{ "path": "bin/fm-spawn.sh", "blob": "88fa2fcfabeea4d8817193b65e700303dc395511", "mode": "reference-only" }],
+      "paths": ["bin/mate.py", "bin/worker-events.ts", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "WORKER.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs", "tests/tui-smoke.py"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R03", "R05"],
       "description": "Mate-owned exact post-close verification for optional completed-task tab closure. After one journaled Herdr tab close, re-read the exact saved pane and record closed only for a structured pane_not_found response; success-but-present, unreadable responses, and close errors without that proof remain uncertain and are never retried automatically. A lost close receipt may complete only when the independent exact-pane postcondition proves absence. Durable task/endpoint identity, worktree, lease, reports and session remain retained. Reference-only; no Firstmate shell code copied.",
       "source_commit": "b430bf50d9aea5d1a810cab1bd293670bbca64be",

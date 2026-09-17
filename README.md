@@ -86,12 +86,23 @@ worker UI.
 
 A small explicit `bin/worker-events.ts` extension sends lifecycle events through a
 separate pipe, leaving stdin/stdout attached to the terminal. After Pi fully settles
-(including automatic retries, compaction and queued follow-ups), the worker requests
-a graceful Pi exit. Its report is stored on disk and the supervisor wakes automatically.
-The Herdr tab and regular-TUI transcript remain; `mate_continue` reopens the same
-saved Pi session. This is one delegated run per attempt, not a permanently idle Pi.
-Quitting before the settled event is a failure, not inferred completion.
-A successful process exit becomes **review**, never automatic task completion.
+(including automatic retries, compaction and queued follow-ups), its report is stored
+on disk and the supervisor wakes automatically. **Pi stays open and idle** in the
+same pane. You can ask follow-up questions there, or use `mate_continue` through the
+supervisor; both start a new tracked attempt in the same Pi session. Reports, usage
+and pending events remain separate per attempt. Idle Pi does not occupy an active
+worker slot, but its Treehouse lease remains held.
+
+The wrapper admits each new round under the task lock, checking the exact endpoint,
+lease, capacity and current approved scope before allowing work. Pending scope,
+completed tasks and uncertain ownership refuse input. Typing directly does not
+approve additional scope: use `mate_extend` and `/mate-approve` as before. Session
+switch/fork/tree navigation and untracked `!`/`!!` shell commands are blocked in a
+worker; use another shell for unrelated work. Normal Pi `/reload` retains the bridge.
+
+A clean manual exit while idle preserves the report; a later `mate_continue` reopens
+the saved session. Quitting during a round without settled evidence is a failure,
+not inferred completion. A report becomes **review**, never automatic task completion.
 Code verification/research/review must themselves be delegated.
 
 ## Task briefs
@@ -117,9 +128,9 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 
 ## Commands
 
-- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; no implicit push/merge/deploy approval.
+- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR, and merge/deploy are never included.
 - `/mate-status` — show open tasks and pending events without invoking a model.
-- `/mate-complete ID [--force]` — accept a stopped `review` task (`--force` also permits `failed`), then separately confirm tab closure and exact Treehouse lease return.
+- `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits `failed`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
@@ -149,12 +160,15 @@ blocks other model tool calls. Normal pi global extensions/skills still load;
 Mate does not disable their own startup hooks or background behavior. Only load
 global extensions you trust to coexist with the supervisor.
 
-`mate_continue` resumes a **stopped** review/failed worker in the same worktree
-and pi session, for the same approved scope. It also supports the narrowly inspected
+`mate_continue` continues an **idle or stopped** review/failed worker in the same
+worktree and Pi session, for the same approved scope. An idle resident Pi receives
+one native user message over its private, generation/attempt-fenced control socket;
+Mate never types terminal keys into it. Model/effort overrides apply to that same Pi.
+A lost control reply leaves uncertain work for inspection, never automatic retry. It also supports the narrowly inspected
 unstarted-continuation recovery described below. It does not reset or reacquire it.
-Human answers to blockers go through the supervisor. Arbitrary live-pane steering
-is intentionally not exposed: inspect a live blocked worker yourself in Herdr
-rather than letting the supervisor blindly approve prompts.
+Human answers to blockers can go through the supervisor or directly into the worker
+pane. Supervisor continuation only accepts idle workers; arbitrary mid-run steering
+or blind approval of interactive prompts is not exposed.
 
 ## New worker pane in an existing tab
 
@@ -195,7 +209,7 @@ No task-state migration is required; old single-tab tasks retain their behavior.
 
 ## Additional scope in the same worktree
 
-For a **stopped `review`/`failed` task**, ask Mate to add work to the existing task.
+For an **idle or stopped `review`/`failed` task**, ask Mate to add work to the existing task.
 Mate records `mate_extend {id, brief}` with only the proposed addition; the approved
 brief and worker settings stay unchanged. Then run `/mate-approve ID` to review the
 current scope, addition, repository, pinned base, branch and existing worktree.
@@ -216,8 +230,9 @@ current scope, addition, repository, pinned base, branch and existing worktree.
   Inspect the current task with `mate_status`; old reports remain evidence for their
   original attempts. Completion requires a new reviewed run covering the addition,
   not merely acceptance of the old report; stale scope confirmations are refused.
-- `complete`, active and `attention` tasks cannot be extended. This does not authorize
-  push/merge/deploy or reopen completed tasks. Scope compliance remains an instruction
+- `complete`, active and `attention` tasks cannot be extended. Approval authorizes
+  push/PR only when the approved scope explicitly requests a PR; it never authorizes
+  merge/deploy or reopening completed tasks. Scope compliance remains an instruction
   to trusted workers, not semantic enforcement of arbitrary continuation messages.
 
 After installing the change, reload/restart the supervisor **with workers stopped**
@@ -251,15 +266,19 @@ excluded from open counts and cannot dispatch, continue, extend, complete or clo
 
 After reviewing the report and any required verification, run `/mate-complete ID`.
 The TUI shows the task scope, base and attempt for your confirmation. Declining
-changes nothing. Acceptance requires state `review` and a released worker lock;
-a changed attempt, active worker or uncertain task cannot be completed.
+changes nothing. Acceptance requires state `review` and a released round lock;
+a changed attempt, active round or uncertain task cannot be completed. The human
+confirmation also requests graceful shutdown of the exact idle Pi, without closing
+the tab or returning its lease. If shutdown cannot be confirmed, acceptance remains
+saved but cleanup refuses; inspect/quit Pi manually. No forced termination or automatic
+shutdown retry occurs.
 
 To accept existing work despite a failed worker run, use `/mate-complete ID --force`.
 The human dialog warns that the result may be incomplete and shows the saved error.
 This only adds `failed` to the allowed states, not `attention` or active tasks. Under
-the worker lock, Mate checks the original endpoint/terminal, shell/process readiness
-and exact Treehouse lease. Missing, busy or changed resources cause refusal; no
-worker is launched or interrupted. Pending/unexecuted scope additions still block.
+the round lock, Mate checks the original endpoint/terminal and exact Treehouse lease,
+plus resident ownership or stopped shell/process readiness as appropriate. Missing,
+busy or changed resources cause refusal; no active round is interrupted. Pending/unexecuted scope additions still block.
 The error, reports, usage and events remain; `completed_via: "mate-complete --force"`
 and `completed_from` record the override alongside the usual time/local account.
 Tab closure still requires its own separate confirmation. Reload the supervisor
@@ -548,14 +567,15 @@ attempt rather than counting the saved session history again.
 - Base approval pins a commit; a moving branch does not change the approved base.
 - Treehouse lease ID/holder, Git common directory and exact Herdr endpoint IDs are checked.
 - Task branches are created without force/reset; pooled branches/commits are preserved.
-- No automatic push, PR publication, merge, deploy or pane cleanup. After
-  `/mate-complete`, separate human confirmations can close an owned worker tab and
-  return its exact clean Treehouse lease. Declining retains the resource; retained
-  leases/worktrees count against Treehouse's pool capacity.
+- No automatic push, PR publication, merge, deploy or pane cleanup. A worker may push
+  only its assigned task branch and open or update a PR when the human-approved scope
+  explicitly requires one. After `/mate-complete`, separate human confirmations can
+  close an owned worker tab and return its exact clean Treehouse lease. Declining
+  retains the resource; retained leases/worktrees count against Treehouse's pool capacity.
 - Worker reports are untrusted evidence, never instructions or human approval.
 - Workers are **trusted local processes, not sandboxed**. Git worktrees isolate
-  changes, not filesystem/network permissions. The worker no-push/no-deploy rules
-  are instructions, not an OS-enforced security boundary. Approve only repositories
+  changes, not filesystem/network permissions. The worker's scope-limited push and
+  no-deploy rules are instructions, not an OS-enforced security boundary. Approve only repositories
   and briefs you trust; Treehouse may run repository setup hooks.
 - Workers load global and worktree-project skills/extensions using normal Pi discovery
   and configured resource filters, plus the explicit Mate event bridge. Worker launches
@@ -771,11 +791,17 @@ data/calm                          persistent Calm presentation preference
 data/.lavish/bearings-board.html   private read-only fleet board (rebuilt in place)
 data/<id>/session.jsonl            worker pi session (reused on continuation)
 data/<id>/events-<attempt>.jsonl    selected Pi lifecycle/message/tool events
-data/<id>/stderr-<attempt>.log      provider/CLI errors
+data/<id>/stderr-<launch-attempt>.log  provider/CLI errors across that Pi process's rounds
 data/<id>/report-<attempt>.txt      retained worker outcome
-data/<id>/run.lock                 live wrapper ownership
+data/<id>/run.lock                 active round / task mutation exclusion
+data/<id>/resident.lock            live wrapper ownership across idle rounds
 data/<id>/startup.log              private project setup output (never auto-delivered)
 ```
+
+`worker_resident` in status indicates the resident wrapper still owns its lock,
+not proof of Pi responsiveness or task completion. Missing ownership is uncertain,
+including after a host crash; no automatic relaunch/adoption occurs. Existing stopped
+tasks without resident ownership still use the saved-session continuation path.
 
 `mate_status` returns 50 tasks per page (`task_offset`) and 50 pending events per
 batch. `/mate-status` requests the same snapshot filtered to open tasks before
@@ -832,7 +858,8 @@ its own named test server; failed fixtures are retained for inspection.
 
 The TUI smoke runs the real Python worker and real Pi in a pseudo-terminal against
 a localhost fake model. It checks native tool/report rendering, separate event
-transport, settled shutdown, durable report and pending wake event. It uses a fixture
+transport, persistent idle Pi, native/supervisor follow-ups, per-round reports/usage,
+scope/stale-confirmation gates and human-completion shutdown. No real model calls. It uses a fixture
 lease checker; the Herdr/Treehouse integration is covered by the separate live smoke.
 
 The supervisor TUI smoke uses real Pi and the real disposable control plane with a

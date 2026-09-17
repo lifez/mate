@@ -11,6 +11,20 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Persistent Pi workers, reference-only to local Firstmate `b430bf50` (no fetch),
+  selected `fm-spawn.sh` Pi `agent_start`/`agent_settled` busy/idle bridge only.
+  Mate now publishes each settled report/event without exiting Pi. Native human
+  follow-ups and `mate_continue` use the same Pi with per-round attempts/usage;
+  current scope, endpoint/lease, capacity and completion gates remain enforced.
+  Mate-owned round admission/reply pipe, separate resident/round locks and private
+  generation/attempt-fenced control socket; no Firstmate shell implementation copied.
+  Human acceptance gracefully exits idle Pi before separately confirmed cleanup.
+  Missing ownership/lost continuation/shutdown replies remain fail-closed; no retry
+  or forced stop. Existing stopped sessions still reopen normally. Original source
+  baselines/hashes/notices are unchanged. Tests use disposable state and localhost
+  fake models, not real task data or provider quota. Stop all workers before updating;
+  no schema migration, but do not downgrade while resident workers are open.
+
 - Mate-owned `/skill:ahoy`, adapted from Firstmate's Ahoy skill at local commit
   `a27646c` (read in full; no fetch). It keeps the visible-history recap, cross-boundary
   unanswered-decision inventory, one-at-a-time impact-ordered guidance and first-real-
@@ -231,8 +245,11 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   active rules require explicit dispatch axes. No separate `crew-dispatch.json`, arrays,
   quota selector or multi-harness routing.
 - Worker ใช้ native pi TUI + Mate-owned event bridge ผ่าน pipe แยก; จบ attempt
-  เมื่อ `agent_settled` แล้ว graceful exit, เก็บ report/wake เหมือนเดิม
-- ยังไม่ทำ automatic cleanup, PR/merge/deploy, remote, multi-harness หรือ supervisor ย่อย
+  เมื่อ `agent_settled` แล้วเก็บ report/wake และคา Pi ไว้ idle ให้คุยต่อ;
+  graceful exit เมื่อ human ยืนยัน completion หรือออกจาก Pi เอง
+- Mate-owned delivery policy: brief ที่ human approve และระบุ PR ชัดเจนอนุญาตให้ worker
+  push เฉพาะ assigned task branch และเปิด/อัปเดต PR นั้นได้; ยังไม่ทำ automatic cleanup,
+  automatic PR, merge/deploy, multi-harness หรือ supervisor ย่อย
 - Ambiguous launch/crash เก็บสถานะ attention ให้ตรวจ ไม่เสี่ยง auto-relaunch
 - Mate-owned recovery fix: initial preflight refusal from a shell background/stopped
   process can continue after the same fail-closed idle-pane/resource checks; legacy
@@ -312,9 +329,10 @@ hash เปลี่ยนไม่ได้หมายถึง upstream เ�
 - Local launch update: อ่าน `launch_template` ของ source pinned เดิมเพิ่มเติมเพื่อยืนยัน
   Firstmate เรียก pi interactive + explicit extension ไม่ใช่ print/JSON stdout
 - ของเราใช้ `--tui-mode regular` และ `bin/worker-events.ts` ที่เขียนเอง ส่ง event ผ่าน
-  inherited pipe โดยไม่ดัก stdin/stdout; exit เมื่อ `agent_settled` ไม่ใช่ `agent_end`
-- ต่างจาก persistent Firstmate worker: หนึ่ง attempt จบแล้ว Pi exit แต่ tab/transcript อยู่;
-  continue เปิด saved session เดิมใหม่ ไม่สร้าง lease ซ้ำ ไม่ copy Firstmate turn-end extension
+  inherited pipe โดยไม่ดัก stdin/stdout; publish report เมื่อ `agent_settled` ไม่ใช่ `agent_end`
+- เดิมหนึ่ง attempt จบแล้ว Pi exit; persistent-worker follow-up ด้านบนเปลี่ยนให้คา Pi
+  เหมือน Firstmate แล้ว โดยใช้ lifecycle/control ของ Mate เอง ไม่ copy turn-end extension.
+  Continue ใช้ Pi เดิมขณะ idle หรือเปิด saved session หากปิดไปแล้ว ไม่สร้าง lease ซ้ำ
 - Tests เพิ่ม: real Python worker + real Pi TUI ใน PTY / localhost fake model
   (`tests/tui-smoke.py`), bridge lifecycle, missing-settled และ forced-kill fail-closed
 - Tests: deny approval, moving ref, exact SHA, unchanged original checkout, lease identity,
