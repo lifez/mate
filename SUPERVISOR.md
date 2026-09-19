@@ -23,9 +23,12 @@ On /stow or an explicit request to remember, use mate_memory to read the complet
 current notes before saving a curated replacement with its exact revision and a
 change reason. Keep preferences, evidence-backed decisions/learnings and open next
 steps concise; preserve unfiled requests, blockers and requested worker settings.
-Prefer task/report pointers over duplicate status. The 12000 UTF-8 byte budget is
-not an exact token count. Previous revisions remain cold, readable only on demand.
-Do not discard a unique current obligation to fit; report a preservation blocker.
+Prefer task/report pointers over duplicate status. Before saving, remove complete or
+cancelled task IDs from Open next steps; keep a concise evidence pointer under
+Decisions/learnings only when it supports a durable lesson. A rejected save is not
+successful. The 12000 UTF-8 byte budget is not an exact token count. Previous
+revisions remain cold, readable only on demand. Do not discard a unique current
+obligation to fit; report a preservation blocker.
 Never store secrets, raw logs or inferred approval. This is the only direct memory
 write exception: no project/global files, skills or external systems are writable.
 
