@@ -1483,7 +1483,7 @@ def memory(db, p):
                 raise ValueError("Memory exceeds 12000 UTF-8 bytes; curate before saving")
             reason = text(p.get("reason"), "memory change reason", 1000)
             normalized = content.replace("\r\n", "\n").replace("\r", "\n")
-            headings = re.findall(r"(?im)^[ \t]*#{1,6}[ \t]+Open[ \t]+next[ \t]+steps\b.*$", normalized)
+            headings = re.findall(r"(?im)^[ \t]*(?:>[ \t]*)*#{1,6}[ \t]+.*Open[ \t]+next[ \t]+steps.*$", normalized)
             if len(headings) > 1 or any(heading != "## Open next steps" for heading in headings):
                 raise ValueError("Open next steps heading must be canonical and unique")
             open_steps = re.findall(r"(?ims)^##[ \t]+Open next steps[ \t]*$\n?(.*?)(?=^##[ \t]+|\Z)", normalized)

@@ -128,6 +128,8 @@ class MateTests(unittest.TestCase):
                         dict(revision=first['revision'], content='## Open next steps\r\n- fix', reason='closed task with CRLF'),
                         dict(revision=first['revision'], content='## Open next steps\n- fix-v2\n## Open next steps\n- fix', reason='closed task in later section'),
                         dict(revision=first['revision'], content=' ## Open next steps ##\n- fix', reason='non-canonical heading'),
+                        dict(revision=first['revision'], content='## Open next steps_foo\n- fix', reason='heading-like suffix'),
+                        dict(revision=first['revision'], content='> ## Open next steps\n- fix', reason='blockquote heading'),
                         dict(revision=first['revision'], content='## Open next steps\n- fix-v2\n## Open next steps\n- fix-v2', reason='duplicate heading'),
                         dict(revision=True, content='bad', reason='invalid'),
                         dict(revision=first['revision'], content='ก' * 4001, reason='too large'),
