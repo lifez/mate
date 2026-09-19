@@ -98,6 +98,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   workers stopped, retain the table on rollback. Disposable tests cover size,
   conflicts, idempotence, cold history, failed-save preservation, command refusal,
   new-session loading, stable prefix, no task/event changes and dev-mode no-op.
+  Follow-up keeps Firstmate's completed-chronology archival rule deterministic at
+  Mate's save boundary: closed task IDs are rejected from `Open next steps`, while
+  concise completed-task evidence may remain in `Decisions/learnings`.
 
 - R02 native wake transport follow-up: use Firstmate watcher's `sendUserMessage`
   (selected `sendWake` at local commit `869ae905779c4c366a45759be8676406a1aae85c`;

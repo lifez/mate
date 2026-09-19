@@ -367,6 +367,8 @@ explicitly unapproved; stowing does not launch workers or change task scope.
 stale replacements and over-budget content fail without changing memory. Every
 changed revision is retained atomically with its change reason and UTC time. Cold
 revisions are never auto-loaded; `mate_memory` with `revision` reads one on demand.
+Saves reject `complete` or `cancelled` task IDs under **Open next steps**; durable
+lessons may instead retain a concise evidence pointer under **Decisions/learnings**.
 No arbitrary filesystem access, global memory, new skills or external publication.
 Keep credentials/secrets out of notes, just as with ordinary conversation history.
 
