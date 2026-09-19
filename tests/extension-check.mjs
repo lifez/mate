@@ -9,8 +9,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workerPolicy = readFileSync(join(sourceRoot, 'WORKER.md'), 'utf8');
 assert.match(workerPolicy, /merge branches or\ncommits locally into the assigned task branch/);
-assert.match(workerPolicy, /never merge a\nGitHub\/remote PR or write directly to the target\/base branch/);
-assert.match(workerPolicy, /unqualified `no merge`\nin a brief means no GitHub\/remote PR merge/);
+assert.match(workerPolicy, /human-approved scope explicitly names a local target branch/);
+assert.match(workerPolicy, /target branch is checked out there, its worktree is clean/);
+assert.match(workerPolicy, /ancestor of the assigned task branch/);
+assert.match(workerPolicy, /Never force,\nreset, resolve conflicts in the target worktree, merge a GitHub\/remote PR, or push this\nlocal delivery/);
+assert.match(workerPolicy, /unqualified `no merge` in a brief means no GitHub\/remote PR merge/);
 const ahoy = readFileSync(join(sourceRoot, '.pi/skills/ahoy/SKILL.md'), 'utf8');
 assert.match(ahoy, /^---\nname: ahoy\ndescription: .+\n---/);
 assert.match(ahoy, /Otherwise, use only visible session history\. Do not call tools/);
@@ -615,6 +618,8 @@ try {
   approval = true;
   await commands['mate-approve'].handler('cancel-me', ctx);
   assert.equal((await call('mate_status', { id: 'cancel-me' })).tasks[0].state, 'approved');
+  await commands['mate-list'].handler('', ctx);
+  assert.equal(notices.at(-1)[0], 'cancel-me\tapproved', '/mate-list shows only open task id and state');
   approval = false;
   await commands['mate-cancel'].handler('cancel-me', ctx);
   assert.equal((await call('mate_status', { id: 'cancel-me' })).tasks[0].state, 'approved', 'decline must not mutate');
@@ -629,20 +634,22 @@ try {
   const commandStatus = JSON.parse(notices.at(-1)[0]);
   assert.equal(commandStatus.total_tasks, 2, 'status keeps the retained-history count');
   assert.deepEqual(commandStatus.tasks, [], '/mate-status shows open tasks only');
+  await commands['mate-list'].handler('', ctx);
+  assert.equal(notices.at(-1)[0], 'No open tasks');
   assert.equal(messages.filter(m => m.message.customType === 'mate-cancelled').length, 1);
   await commands['mate-cancel'].handler('cancel-me', ctx);
   assert.equal(cancelled.cancellation_history, undefined, 'cancellation audit stays cold by default');
   cancelled = (await call('mate_status', { id: 'cancel-me', history: true })).tasks[0];
   assert.equal(cancelled.cancellation_history.length, 1, 'repeat preserves original cancellation audit');
 
-  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(same_tab_as='supervisor',worktree=${JSON.stringify(repo)},lease={'lease_id':'lease-test','lease_holder':'holder-test'})\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(same_tab_as='supervisor',worktree=${JSON.stringify(repo)},lease={'lease_id':'lease-test','lease_holder':'holder-test'},pane_gone_at_completion=1)\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   writeFileSync(join(repo, 'unfinished.txt'), 'keep me');
   let returnBody = '';
   await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
     if (title === 'Return Treehouse worktree too?') { returnBody = body; return false; }
     throw new Error('Must not offer shared-tab closure');
   } } });
-  assert.match(notices.at(-2)[0], /Shared tab retained/);
+  assert.match(notices.at(-2)[0], /worker pane was already absent/);
   assert.match(returnBody, /\?\? unfinished\.txt/);
   assert.match(notices.at(-1)[0], /lease retained/);
   assert.equal(tools.mate_dispatch.parameters.properties.same_tab_as.type, 'string');

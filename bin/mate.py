@@ -521,6 +521,8 @@ def dispatch(db, p):
             tab=caller.get("tab_id") if reference == "supervisor" else source.get("tab"),
             pane=parent if reference == "supervisor" else source.get("pane"),
             terminal_id=pane.get("terminal_id") if reference == "supervisor" else terminal_id(source)))
+        if reference != "supervisor":
+            task["workspace"] = task["split_target"]["workspace"]
     if task.get("same_tab_as"):
         check_split_target(task)
     pi_binary = shutil.which("pi")
@@ -582,7 +584,7 @@ def dispatch(db, p):
         task["pane"] = pane["pane_id"]
         task["tab"] = target["tab"] if task.get("same_tab_as") else created["tab"]["tab_id"]
         if task.get("same_tab_as") and (pane.get("tab_id") != task["tab"] or
-                pane.get("workspace_id") != workspace or pane["pane_id"] == target["pane"] or
+                pane.get("workspace_id") != task["workspace"] or pane["pane_id"] == target["pane"] or
                 pane.get("terminal_id") == target["terminal_id"]):
             raise ValueError("Split receipt does not identify a new pane in the target tab")
         actual = check_endpoint(task, task["pane"])
@@ -1176,16 +1178,28 @@ def complete(db, p):
     except BlockingIOError:
         raise ValueError("Worker is still active; wait before completing the task") from None
     try:
+        pane_gone = False
         if task.get("worker_control"):
             check_resident(task)
         elif force:
-            ready_pane(task)
-            check_lease(task)
+            presence = herdr_pane_presence(task, task["pane"])
+            if presence == "present":
+                ready_pane(task)
+                check_lease(task)
+            elif presence == "gone":
+                if check_lease(task).get("processes") != []:
+                    raise ValueError("Treehouse still reports worktree processes after the worker pane disappeared")
+                pane_gone = True
+            else:
+                raise ValueError("Cannot confirm whether the exact worker pane still exists")
         if load(db, task["id"]) != task:
             raise ValueError("Task changed during completion checks; confirm again")
         with db:
             if force:
                 task["completed_from"] = task["state"]
+            if pane_gone:
+                task.update(pane_gone_at_completion=time.time(),
+                            pane_gone_by=pwd.getpwuid(os.getuid()).pw_name)
             task.update(state="complete", completed_at=time.time(),
                         completed_by=pwd.getpwuid(os.getuid()).pw_name,
                         completed_via="mate-complete --force" if force else "mate-complete")
@@ -1239,9 +1253,9 @@ def return_lease(db, p):
         if task.get("worker_control"):
             raise ValueError("Pi shutdown is not confirmed; quit/inspect before returning its lease")
         current_lease = check_lease(task)
-        if task.get('tab_close_state') == 'closed':
+        if task.get('tab_close_state') == 'closed' or task.get('pane_gone_at_completion'):
             if current_lease.get('processes') != []:
-                raise ValueError('Treehouse still reports worktree processes after tab closure')
+                raise ValueError('Treehouse still reports worktree processes after pane/tab closure')
         else:
             shell, _ = ready_pane(task)
             processes = current_lease.get('processes')

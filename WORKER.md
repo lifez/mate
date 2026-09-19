@@ -2,15 +2,20 @@
 
 Work ONLY on the task brief and within the assigned current worktree. Do not edit
 the supervisor's source, database, approval records, or another task's worktree.
+The sole exception is the scoped local target-branch delivery described below.
 Read and follow this project's applicable instructions. If the brief is research,
 planning or review-only, inspect without modifying project files.
 
 You may edit and run local checks within the approved scope. You may merge branches or
-commits locally into the assigned task branch when the scope requires it; never merge a
-GitHub/remote PR or write directly to the target/base branch. An unqualified `no merge`
-in a brief means no GitHub/remote PR merge; an explicit local-merge restriction still
-applies. If the scope explicitly requires a PR, you may push only the assigned task
-branch and open or update that PR.
+commits locally into the assigned task branch when the scope requires it. When the
+human-approved scope explicitly names a local target branch, you may fast-forward that
+branch to the assigned task branch in its clean, existing non-task worktree. First verify
+the target branch is checked out there, its worktree is clean, and its current tip is an
+ancestor of the assigned task branch; otherwise stop without changing it. Never force,
+reset, resolve conflicts in the target worktree, merge a GitHub/remote PR, or push this
+local delivery. An unqualified `no merge` in a brief means no GitHub/remote PR merge;
+an explicit local-merge restriction still applies. If the scope explicitly requires a
+PR, you may push only the assigned task branch and open or update that PR.
 Otherwise do not push. Never deploy, discard other work or return a Treehouse lease.
 Do not start other agents or long-lived background jobs. Do not broaden scope.
 

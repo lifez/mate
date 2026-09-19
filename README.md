@@ -128,8 +128,9 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 
 ## Commands
 
-- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope; GitHub/remote PR merge and deploy are never included.
+- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may explicitly name a local target branch for safe fast-forward delivery; GitHub/remote PR merge and deploy are never included.
 - `/mate-status` — show open tasks and pending events without invoking a model.
+- `/mate-list` — show only the ID and state of each open task.
 - `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits `failed`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
@@ -232,9 +233,11 @@ current scope, addition, repository, pinned base, branch and existing worktree.
   not merely acceptance of the old report; stale scope confirmations are refused.
 - `complete`, active and `attention` tasks cannot be extended. Approval authorizes
   push/PR only when the approved scope explicitly requests a PR. Local merges into the
-  assigned task branch are allowed when required by scope; it never authorizes a
-  GitHub/remote PR merge, deploy or reopening completed tasks. Scope compliance remains
-  an instruction to trusted workers, not semantic enforcement of arbitrary continuation messages.
+  assigned task branch are allowed when required by scope. An addition may explicitly
+  name a local target branch for fast-forward-only delivery from the assigned task
+  branch; it never authorizes a GitHub/remote PR merge, deploy or reopening completed
+  tasks. Scope compliance remains an instruction to trusted workers, not semantic
+  enforcement of arbitrary continuation messages.
 
 After installing the change, reload/restart the supervisor **with workers stopped**
 to load both the new tool and control plane. Existing tasks need no database migration;
@@ -278,8 +281,12 @@ To accept existing work despite a failed worker run, use `/mate-complete ID --fo
 The human dialog warns that the result may be incomplete and shows the saved error.
 This only adds `failed` to the allowed states, not `attention` or active tasks. Under
 the round lock, Mate checks the original endpoint/terminal and exact Treehouse lease,
-plus resident ownership or stopped shell/process readiness as appropriate. Missing,
-busy or changed resources cause refusal; no active round is interrupted. Pending/unexecuted scope additions still block.
+plus resident ownership or stopped shell/process readiness as appropriate. If the
+human already closed the original pane, Mate accepts only Herdr's structured
+`pane_not_found` proof plus the exact lease reporting an empty process inventory;
+it records the missing pane and skips the later tab-close prompt. An unreadable pane,
+remaining process, busy or changed resource still refuses; no active round is
+interrupted. Pending/unexecuted scope additions still block.
 The error, reports, usage and events remain; `completed_via: "mate-complete --force"`
 and `completed_from` record the override alongside the usual time/local account.
 Tab closure still requires its own separate confirmation. Reload the supervisor
@@ -322,7 +329,8 @@ endpoint, and ambiguous lease-return response, leaves the corresponding state un
 and requires manual inspection, not automatic retry. Successful operations record their local account/time; repeats
 are no-ops. The footer counts only open (not `complete` or `cancelled`) tasks, across all task pages.
 Completed and cancelled tasks remain available through `mate_status` (including ID-specific inspection) and cannot continue or reopen in this version;
-`/mate-status` lists only open tasks. Propose a new task if needed.
+`/mate-status` lists only open tasks; `/mate-list` is its compact ID/state view.
+Propose a new task if needed.
 
 ## Calm mode
 
@@ -569,8 +577,12 @@ attempt rather than counting the saved session history again.
 - Treehouse lease ID/holder, Git common directory and exact Herdr endpoint IDs are checked.
 - Task branches are created without force/reset; pooled branches/commits are preserved.
 - No automatic push, PR publication, GitHub/remote PR merge, deploy or pane cleanup.
-  A worker may merge locally into its assigned task branch when required by scope. It
-  may push only its assigned task branch and open or update a PR when the human-approved
+  A worker may merge locally into its assigned task branch when required by scope. When
+  human-approved scope explicitly names a local target branch, it may fast-forward that
+  branch to the assigned task branch only in a clean, checked-out, existing non-task
+  worktree whose current tip is already an ancestor. Dirty, missing or diverged targets
+  are refused; no force/reset, target-worktree conflict resolution or push is allowed.
+  It may push only its assigned task branch and open or update a PR when the human-approved
   scope explicitly requires one. After `/mate-complete`, separate human confirmations can
   close an owned worker tab and return its exact clean Treehouse lease. Declining
   retains the resource; retained leases/worktrees count against Treehouse's pool capacity.

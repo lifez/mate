@@ -237,6 +237,40 @@ class MateTests(unittest.TestCase):
         self.assertEqual(sum(call[:2] == ('workspace', 'create') for call in calls), 1)
         self.assertEqual(self.launches, 2)
 
+    def test_same_tab_dispatch_targets_existing_task_workspace(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        source = self.propose('related')
+        source.update(session=os.environ['HERDR_SESSION'], socket=os.environ['HERDR_SOCKET_PATH'],
+            workspace='w2', tab='w2:t1', pane='w2:p1',
+            endpoint_receipt={'root_pane': {'terminal_id': 'target-terminal'}})
+        with self.db:
+            m.save(self.db, source)
+
+        def herdr(task, *args):
+            if args[:2] == ('pane', 'get'):
+                panes = {
+                    'w1:p1': dict(pane_id='w1:p1', workspace_id='w1', tab_id='w1:t1', terminal_id='owner'),
+                    'w2:p1': dict(pane_id='w2:p1', workspace_id='w2', tab_id='w2:t1', terminal_id='target-terminal'),
+                    'w2:p2': dict(pane_id='w2:p2', workspace_id='w2', tab_id='w2:t1', terminal_id='split-terminal'),
+                }
+                return {'pane': panes[args[2]]}
+            if args[:2] == ('pane', 'split'):
+                self.assertEqual((task['launcher_workspace'], task['workspace']), ('w1', 'w2'))
+                return {'pane': dict(pane_id='w2:p2', workspace_id='w2', tab_id='w2:t1', terminal_id='split-terminal')}
+            if args[:2] == ('pane', 'process-info'):
+                return dict(process_info=dict(pane_id='w2:p2', shell_pid=100,
+                    foreground_process_group_id=100, foreground_processes=[dict(pid=100)]))
+            if args[:2] == ('pane', 'run'):
+                self.launches += 1
+                return {}
+            raise AssertionError(args)
+
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+            task = self.dispatch(same_tab_as='related')
+        self.assertEqual((task['launcher_workspace'], task['workspace'], task['tab'], task['pane']),
+                         ('w1', 'w2', 'w2:t1', 'w2:p2'))
+
     def test_same_tab_dispatch_continuation_and_closure(self):
         self.config.write_text(json.dumps({'worker': {'workspace_per_task': True}}))
         calls = []
@@ -250,7 +284,8 @@ class MateTests(unittest.TestCase):
             return result
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
-        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr):
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', herdr), \
+             patch.object(m, 'herdr_pane_presence', return_value='present'):
             task = self.dispatch(same_tab_as='supervisor')
             self.assertEqual((task['tab'], task['pane']), ('w1:t1', 'w1:p3'))
             self.assertFalse(task['workspace_per_task'])
@@ -289,7 +324,7 @@ class MateTests(unittest.TestCase):
             for reference in ('missing', 'fix', '', None, 1, '--current'):
                 with self.subTest(reference=reference), self.assertRaises(ValueError):
                     self.dispatch(same_tab_as=reference)
-            for key, bad in (('session', 'other'), ('socket', '/other'), ('workspace', 'w2'),
+            for key, bad in (('session', 'other'), ('socket', '/other'),
                              ('tab', None), ('pane', None), ('tab_close_state', 'uncertain'),
                              ('endpoint_receipt', {'root_pane': {'terminal_id': 'reused'}})):
                 with self.subTest(key=key):
@@ -1239,7 +1274,8 @@ print('fixture-private-output')
     def test_force_complete_preserves_evidence_and_safety_gates(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
-        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr), \
+             patch.object(m, 'herdr_pane_presence', return_value='present'):
             task = self.dispatch()
             task.update(state='failed', error='Pi exit=1, settled=False')
             with self.db:
@@ -1291,6 +1327,33 @@ print('fixture-private-output')
         self.assertEqual(snapshot['tasks'][0]['error'], task['error'])
         self.assertEqual(len(snapshot['events']), 2, 'completion preserves approval and failure events')
         self.assertEqual(snapshot['open_tasks'], 0)
+
+    def test_force_complete_accepts_exact_missing_pane_only_without_worktree_processes(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            task.update(state='failed', error='Pane closed manually')
+            with self.db:
+                m.save(self.db, task)
+            params = dict(id='fix', attempt=1, force=True)
+            with patch.object(m, 'herdr_pane_presence', return_value='unknown'):
+                with self.assertRaisesRegex(ValueError, 'Cannot confirm'):
+                    m.complete(self.db, params)
+            with patch.object(m, 'herdr_pane_presence', return_value='gone'):
+                with self.assertRaisesRegex(ValueError, 'still reports worktree processes'):
+                    m.complete(self.db, params)
+                self.leases[0]['processes'] = []
+                with patch.object(m, 'ready_pane', side_effect=AssertionError('missing pane must not be read')):
+                    completed = m.complete(self.db, params)
+                    self.assertEqual(completed['state'], 'complete')
+                    self.assertTrue(completed['pane_gone_at_completion'])
+                    self.assertTrue(completed['pane_gone_by'])
+                    lease_params = dict(id='fix', attempt=1, worktree=task['worktree'],
+                                        lease_id=task['lease']['lease_id'],
+                                        lease_holder=task['lease']['lease_holder'], clean=False)
+                    returned = m.return_lease(self.db, lease_params)
+                    self.assertEqual(returned['lease_return_state'], 'returned')
 
     def test_pane_process_ownership_not_shared_tty_or_program_name(self):
         self.propose()

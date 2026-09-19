@@ -13,7 +13,9 @@ For GitHub work, instruct the delegated worker to use `gh-axi` as described in
 `WORKER.md`; do not invoke it yourself. A human-approved brief that explicitly
 requires a PR authorizes pushing only the assigned task branch and publishing that
 PR. Tool choice alone authorizes no remote change. Local merges into the assigned
-branch are allowed when required by scope; GitHub/remote PR merge remains prohibited.
+branch are allowed when required by scope. Human-approved scope may also explicitly
+name a local target branch for safe fast-forward delivery; GitHub/remote PR merge
+remains prohibited.
 
 ## Private memory and /stow
 
@@ -114,7 +116,10 @@ notes; normal startup does not load archived revisions or start a model just to 
    as approval or smuggle additions into mate_continue. Pending additions block
    continuation/completion; declining the dialog discards the pending addition.
    A different mate_extend brief replaces the pending proposal and requires fresh
-   confirmation. After an approval event, inspect the updated brief, scope token
+   confirmation. A request to deliver completed work into a named local target branch
+   is additional scope: propose it with mate_extend, then use mate_continue only after
+   `/mate-approve` records the human approval. After an approval event, inspect the
+   updated brief, scope token
    and current attempt. If the addition is still eligible and has not run, call
    mate_continue in that same turn, not mate_dispatch or another approval request:
    same worktree, lease, base and Pi session, no startup rerun. If already started
@@ -142,8 +147,10 @@ Use these five short headings in `mate_propose.brief` and `mate_extend.brief`:
   dependencies requiring a human answer. Never treat this section as permission to
   approve, expand scope or bypass a runtime refusal.
 
-Write `GitHub/remote PR merge` when prohibiting delivery; say `local merge` explicitly
-only when the task must also forbid merging branches or commits into its task branch.
+Write `GitHub/remote PR merge` when prohibiting remote delivery. Say `local merge`
+explicitly when forbidding merges into the task branch. Local target-branch delivery
+must name the branch and require a clean existing non-task worktree plus fast-forward-only
+movement from its current tip to the assigned task branch; otherwise the worker stops.
 
 For additions, cover only the new request in these sections; retain the original
 approved scope unchanged. Existing free-text briefs remain valid: do not rewrite
@@ -167,14 +174,16 @@ shutdown is uncertain, acceptance remains recorded but cleanup refuses until the
 human inspects/quits it. Never force-stop it or claim cleanup succeeded. Suggest this after relaying evidence; never claim to complete
 it yourself or equate report/ack with acceptance. `complete` records acceptance,
 not independent verification or remote push/PR-merge authority. Only the command's
-human prompts may close an owned tab or return the exact clean Treehouse lease;
+separate human prompts may close an owned tab or return the exact clean Treehouse lease;
 never invoke those mutation RPCs yourself. Completed tasks cannot continue; new
 work needs a new proposal and base approval.
 If the human explicitly wants to accept a failed result without another worker run,
 suggest `/mate-complete ID --force`. This remains a human-only confirmation, records
-the override and retains the error/evidence. It does not bypass active-worker,
-uncertain-state, endpoint/lease or pending/unexecuted-scope checks. Never invoke it
-on the human's behalf or present force acceptance as successful verification.
+the override and retains the error/evidence. A manually closed original pane is
+accepted only when Herdr gives structured `pane_not_found` proof and the exact lease
+has no processes; unreadable or busy resources still refuse. It does not bypass
+active-worker, uncertain-state, lease or pending/unexecuted-scope checks. Never invoke
+it on the human's behalf or present force acceptance as successful verification.
 
 Only the human can cancel an unstarted task via `/mate-cancel ID`. Never expose or
 invoke its mutation RPC as a model tool, and never treat recovery or a user message
@@ -201,11 +210,14 @@ read-only; ask for base approval for that task too. Report who checked what.
 
 Push and PR publication are authorized only when the human-approved scope explicitly
 requires a PR, and then only for the assigned task branch and that PR. A worker may
-merge locally into its assigned task branch when required by scope, but must never
-merge a GitHub/remote PR or write directly to the target/base branch. Never deploy,
-discard, clean up or automatically return a worktree. Otherwise keep work until the
-user decides how to deliver it. Do not treat a clean working tree as proof that commits
-landed.
+merge locally into its assigned task branch when required by scope. Human-approved
+scope may explicitly name a local target branch for delivery: the worker may only
+fast-forward its clean, checked-out, existing non-task worktree when its current tip is
+an ancestor of the assigned task branch. It must stop on a dirty/missing/diverged target
+and must never force/reset, resolve target-worktree conflicts, push that delivery, or
+merge a GitHub/remote PR. Never deploy, discard, clean up or automatically return a
+worktree. Otherwise keep work until the user decides how to deliver it. Do not treat a
+clean working tree as proof that commits landed.
 
 If the watcher fails, say monitoring is unavailable; ask for /mate-reconnect.
 Uncertain launches remain preserved for inspection, never blindly re-dispatch.

@@ -299,7 +299,7 @@
     },
     {
       "component_ids": ["R02", "R03", "R06"],
-      "description": "Mate-owned human-only /mate-complete ID --force permits stopped failed tasks after original pane/process and exact lease checks under worker lock. Preserve scope/attempt gates, error/reports/events/usage; record completed_via and completed_from, retain separately confirmed tab closure. No upstream import or provenance baseline change.",
+      "description": "Mate-owned human-only /mate-complete ID --force permits stopped failed tasks after original pane/process and exact lease checks under worker lock. A manually closed pane qualifies only with structured pane_not_found proof and an exact lease with empty process inventory; record the missing pane and skip redundant tab closure. Preserve scope/attempt gates, error/reports/events/usage and completion audit. No upstream import or provenance baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "SUPERVISOR.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
       "local_commit": null
     },
@@ -347,7 +347,7 @@
     },
     {
       "component_ids": ["R02", "R03"],
-      "description": "Mate-owned status filtering: snapshot open_tasks counts non-complete tasks before pagination, the footer uses this count, and /mate-status filters closed task rows before pagination while mate_status retains historical inspection. Totals and pending events remain unchanged. No upstream import or baseline change.",
+      "description": "Mate-owned status filtering: snapshot open_tasks counts non-complete tasks before pagination, the footer uses this count, /mate-status filters closed task rows before pagination, and /mate-list projects that same open snapshot to ID/state lines only while mate_status retains historical inspection. Totals and pending events remain unchanged. No upstream import or baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "tests/test_mate.py", "tests/extension-check.mjs", "README.md"],
       "local_commit": null
     },

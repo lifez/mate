@@ -376,14 +376,14 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         if (task.pending_scope) {
           if (!["review", "failed"].includes(task.state)) throw new Error("Only idle or stopped review/failed tasks can extend scope");
           const yes = await ctx.ui.confirm("Approve additional task scope?",
-            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope; no GitHub/remote PR merge or deploy approval. Declining discards only this pending addition.`);
+            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may name a local target branch for clean fast-forward-only delivery from the task branch; no GitHub/remote PR merge or deploy approval. Declining discards only this pending addition.`);
           await rpc("review_scope", { id: task.id, token: task.pending_scope.token, attempt: task.attempt, sha: task.sha, approve: yes });
           ctx.ui.notify(yes ? "Additional scope approved; use mate_continue. No worker started." : "Pending addition discarded; approved scope unchanged", "info");
           await poll(generation); // Durable approval event also replays after a restart.
           return;
         }
         if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
-        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope; no GitHub/remote PR merge or deploy approval is included.`);
+        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may name a local target branch for clean fast-forward-only delivery from the task branch; no GitHub/remote PR merge or deploy approval is included.`);
         if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
         await rpc("approve", { id: task.id, sha: task.sha, brief: task.brief });
         ctx.ui.notify(`Approved ${task.id}; supervisor dispatch pending. No worker started.`, "info");
@@ -420,7 +420,9 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
           ctx.ui.notify(`Acceptance saved, but Pi shutdown is unconfirmed: ${task.worker_stop_error || "inspect the worker"}. Quit/inspect it manually before cleanup; no automatic retry.`, "error");
           return;
         }
-        if (task.same_tab_as) {
+        if (task.pane_gone_at_completion) {
+          ctx.ui.notify("Exact worker pane was already absent at force completion; skipping tab closure", "info");
+        } else if (task.same_tab_as) {
           ctx.ui.notify("Shared tab retained; returning the lease may end its worker pane shell", "info");
         } else if (task.tab_close_state !== "closed") {
           if (task.tab_close_state) throw new Error("Task remains complete, but previous tab closure is uncertain; inspect manually");
@@ -480,6 +482,11 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
     } });
   pi.registerCommand("mate-status", { description: "Show open local tasks without using model quota",
     handler: async (_args, ctx) => { try { ctx.ui.notify(JSON.stringify(await rpc("status", { open_only: true }), null, 2), "info"); } catch (error) { ctx.ui.notify(String(error), "error"); } } });
+  pi.registerCommand("mate-list", { description: "List open task IDs and states",
+    handler: async (_args, ctx) => { try {
+      const { tasks } = await rpc("status", { open_only: true });
+      ctx.ui.notify(tasks.length ? tasks.map((task: any) => `${task.id}\t${task.state}`).join("\n") : "No open tasks", "info");
+    } catch (error) { ctx.ui.notify(String(error), "error"); } } });
   pi.registerCommand("mate-wake", { description: "Replay pending durable events", handler: async () => { delivered.clear(); await poll(generation); } });
   pi.registerCommand("mate-reconnect", { description: "Restart Mate's owned watcher/control plane", handler: async (_args, ctx) => { await activate(ctx); } });
 }

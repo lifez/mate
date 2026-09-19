@@ -41,7 +41,8 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   arrays, quota routing or shell parser copied. Python/TypeScript validate fail closed.
 
 - Mate-owned compact status: `/mate-status` filters completed/cancelled task rows
-  before pagination while retaining total/open counts and pending events; the
+  before pagination while retaining total/open counts and pending events;
+  `/mate-list` projects the same open snapshot to ID/state lines only. The
   `mate_status` model tool keeps historical rows and ID inspection. Default task
   inspection includes current approved and pending scope, latest scope token/first-
   attempt, settings/error/startup and usage totals; full historical journal is opt-in
@@ -141,7 +142,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 - Mate-owned `/mate-complete ID --force`: human acceptance also permits stopped
   failed tasks; reuse lock, original pane/process and lease checks, preserve scope
   gates and failed-run evidence, record override/source state and keep tab closure
-  separately confirmed. No upstream import or provenance baseline change.
+  separately confirmed. A manually closed pane is accepted only from structured
+  `pane_not_found` plus the exact lease's empty process inventory; record that proof
+  and skip redundant tab closure. No upstream import or provenance baseline change.
 
 - Mate-owned optional `mate_dispatch same_tab_as`: split right/no-focus in an
   existing task or supervisor tab, with independent worktree/branch/lease/session.
@@ -249,8 +252,10 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   graceful exit เมื่อ human ยืนยัน completion หรือออกจาก Pi เอง
 - Mate-owned delivery policy: brief ที่ human approve และระบุ PR ชัดเจนอนุญาตให้ worker
   push เฉพาะ assigned task branch และเปิด/อัปเดต PR นั้นได้; local merge เข้า assigned
-  task branch ทำได้ตาม scope แต่ห้าม merge GitHub/remote PR หรือเขียน target/base branch
-  โดยตรง; ยังไม่ทำ automatic cleanup, automatic PR/deploy, multi-harness หรือ supervisor ย่อย
+  task branch ทำได้ตาม scope และ scope ที่ approve สามารถระบุ local target branch ให้
+  fast-forward จาก task branch ได้เฉพาะ existing non-task worktree ที่ clean และไม่ diverge;
+  ห้าม force/reset, แก้ conflict ใน target, push delivery หรือ merge GitHub/remote PR;
+  ยังไม่ทำ automatic cleanup, automatic PR/deploy, multi-harness หรือ supervisor ย่อย
 - Ambiguous launch/crash เก็บสถานะ attention ให้ตรวจ ไม่เสี่ยง auto-relaunch
 - Mate-owned recovery fix: initial preflight refusal from a shell background/stopped
   process can continue after the same fail-closed idle-pane/resource checks; legacy
