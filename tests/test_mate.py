@@ -125,6 +125,7 @@ class MateTests(unittest.TestCase):
         self.assertEqual(m.memory(self.db, dict(action='save', revision=first['revision'], content=first['content'], reason='unchanged')), first)
         for invalid in [dict(revision=0, content='stale', reason='stale'),
                         dict(revision=first['revision'], content='## Open next steps\n- fix', reason='closed task'),
+                        dict(revision=first['revision'], content='## Open next steps\n- fix-v2\n## Open next steps\n- fix', reason='closed task in later section'),
                         dict(revision=True, content='bad', reason='invalid'),
                         dict(revision=first['revision'], content='ก' * 4001, reason='too large'),
                         dict(revision=first['revision'], content=' ', reason='empty'),
