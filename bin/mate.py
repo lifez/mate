@@ -1482,6 +1482,12 @@ def memory(db, p):
             if len(content.encode("utf-8")) > 12000:
                 raise ValueError("Memory exceeds 12000 UTF-8 bytes; curate before saving")
             reason = text(p.get("reason"), "memory change reason", 1000)
+            open_steps = re.search(r"(?ims)^##[ \t]+Open next steps[ \t]*$\n?(.*?)(?=^##[ \t]+|\Z)", content)
+            if open_steps:
+                closed = {task["id"] for task in tasks(db) if task.get("state") in ("complete", "cancelled")}
+                mentioned = closed & set(re.findall(r"(?<![a-z0-9-])[a-z][a-z0-9-]{0,47}(?![a-z0-9-])", open_steps.group(1)))
+                if mentioned:
+                    raise ValueError("Open next steps references closed tasks; remove completed chronology: " + ", ".join(sorted(mentioned)))
             if revision != (current[0] if current else 0):
                 raise ValueError("Memory revision changed; read current memory before saving")
             if not current or content != current[1]:

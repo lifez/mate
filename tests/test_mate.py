@@ -112,13 +112,19 @@ class MateTests(unittest.TestCase):
 
     def test_stow_memory_budget_history_conflicts_and_task_independence(self):
         self.propose()
+        closed = m.load(self.db, 'fix')
+        closed['state'] = 'complete'
+        with self.db:
+            m.save(self.db, closed)
+        self.propose('fix-v2')
         before = m.snapshot(self.db, {})
         empty = m.memory(self.db, {})
         self.assertEqual(empty['revision'], 0)
-        first = m.memory(self.db, dict(action='save', revision=0, content='## Preferences\nตอบภาษาไทย', reason='User preference'))
+        first = m.memory(self.db, dict(action='save', revision=0, content='## Preferences\nตอบภาษาไทย\n## Open next steps\n- fix-v2', reason='User preference'))
         self.assertEqual(first['bytes'], len(first['content'].encode('utf-8')))
         self.assertEqual(m.memory(self.db, dict(action='save', revision=first['revision'], content=first['content'], reason='unchanged')), first)
         for invalid in [dict(revision=0, content='stale', reason='stale'),
+                        dict(revision=first['revision'], content='## Open next steps\n- fix', reason='closed task'),
                         dict(revision=True, content='bad', reason='invalid'),
                         dict(revision=first['revision'], content='ก' * 4001, reason='too large'),
                         dict(revision=first['revision'], content=' ', reason='empty'),
