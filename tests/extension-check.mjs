@@ -36,13 +36,14 @@ const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-coding-agent': join(installed, 'dist/index.js'),
   '@earendil-works/pi-tui': join(installed, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
-const { default: factory, workerProfile, dispatchProfile, dispatchInstructions } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
+const { default: factory, workerProfile, dispatchProfile, dispatchInstructions, codexQuotaStatus } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
 const { statusPreview } = await jiti.import(join(root, '.pi/extensions/lib/calm.ts'));
 const { renderBearingsBoard } = await jiti.import(join(root, '.pi/extensions/lib/bearings.ts'));
 process.env.MATE_HOME = join(tmp, 'home');
 const originalPath = process.env.PATH;
 const fakebin = join(tmp, 'fakebin'); mkdirSync(fakebin);
 writeFileSync(join(fakebin, 'lavish-axi'), '#!/bin/sh\nprintf "session:\\n  url: http://127.0.0.1:4321/session/fixture\\n  status: opened\\n"\n', { mode: 0o755 });
+writeFileSync(join(fakebin, 'quota-axi'), '#!/bin/sh\nprintf \'%s\\n\' \'{"providers":[{"provider":"codex","windows":[{"id":"five_hour","percentRemaining":73.6},{"id":"weekly","percentRemaining":90}],"state":{"status":"fresh"}}]}\'\n', { mode: 0o755 });
 process.env.PATH = `${fakebin}:${originalPath}`;
 const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -149,6 +150,10 @@ try {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
   }
+  assert.equal(codexQuotaStatus({ providers: [{ provider: 'codex', windows: [
+    { id: 'five_hour', percentRemaining: 73.6 }, { id: 'weekly', percentRemaining: 90 },
+  ], state: { status: 'fresh' } }] }), 'Codex left: 5h 74% · week 90%');
+  assert.equal(codexQuotaStatus({ providers: [{ provider: 'codex', windows: [], state: { status: 'stale' } }] }), undefined);
   assert.deepEqual(workerProfile(ctx, {}), { provider: 'openai-codex', model: 'main-model', effort: 'high' });
   assert.deepEqual(workerProfile(ctx, { model: 'worker-model', effort: 'xhigh' }), { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
   assert.deepEqual(workerProfile(ctx, { effort: 'low' }), { provider: 'openai-codex', model: 'main-model', effort: 'low' });
@@ -212,6 +217,7 @@ try {
   cpSync(join(root, 'mate.config.example.json'), join(root, 'mate.config.json'));
   await handlers.session_start({}, ctx);
   await wait(() => call('mate_status'));
+  await wait(() => statuses['mate-quota'] === 'Codex left: 5h 74% · week 90%');
   await commands.bearings.handler('', ctx);
   assert.match(notices.at(-1)[0], /Usage: \/bearings lavish/);
   await commands.bearings.handler('lavish', ctx);
@@ -675,7 +681,7 @@ try {
   assert.equal(messages.length, stopped, 'stow refuses after ownership shutdown');
   await sleep(2100);
   assert.equal(messages.length, stopped, 'shutdown does not re-arm');
-  console.log('PASS: Bearings read-only board/command, stow command/refusals, memory save/history/conflicts/session reload/stable prefix, dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
+  console.log('PASS: Codex quota footer, Bearings read-only board/command, stow command/refusals, memory save/history/conflicts/session reload/stable prefix, dev mode no-op / supervisor policy separation, worker config validation/precedence/reload/catalog, Calm persistence/toggle/rendering/payload preservation, model/effort resolution and validation, extension load, tool guard, human-only approval/cancellation, follow-up wake, dedup, restart replay, ack, shutdown');
 } finally {
   await handlers.session_shutdown();
   rmSync(tmp, { recursive: true, force: true });

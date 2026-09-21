@@ -328,6 +328,7 @@ safe only when this independent postcondition succeeds. Any still-present or unr
 endpoint, and ambiguous lease-return response, leaves the corresponding state uncertain
 and requires manual inspection, not automatic retry. Successful operations record their local account/time; repeats
 are no-ops. The footer counts only open (not `complete` or `cancelled`) tasks, across all task pages.
+When `quota-axi` is available, Mate also shows the fresh Codex five-hour and weekly subscription quota remaining in the footer, refreshed every five minutes. Missing, stale or failed quota reads are hidden; they never block supervision.
 Completed and cancelled tasks remain available through `mate_status` (including ID-specific inspection) and cannot continue or reopen in this version;
 `/mate-status` lists only open tasks; `/mate-list` is its compact ID/state view.
 Propose a new task if needed.

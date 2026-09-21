@@ -1,7 +1,7 @@
 // Lifecycle adapted from Firstmate fm-primary-pi-watch.ts (UPSTREAM.md R02).
 // Copyright (c) 2026 Kun Chen. See third_party/firstmate/LICENSE.
 // Mate owns its protocol/state; no Firstmate runtime dependencies.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,6 +91,17 @@ export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: stri
 const allowed = ["mate_propose", "mate_dispatch", "mate_status", "mate_ack", "mate_continue", "mate_extend", "mate_memory"];
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} });
 
+export function codexQuotaStatus(value: any) {
+  if (!object(value)) return undefined;
+  const provider = Array.isArray(value.providers) ? value.providers.find((item: any) => item?.provider === "codex") : undefined;
+  if (!object(provider) || provider.state?.status !== "fresh" || !Array.isArray(provider.windows)) return undefined;
+  const labels = [["five_hour", "5h"], ["weekly", "week"]].flatMap(([id, label]) => {
+    const window = provider.windows.find((item: any) => item?.id === id);
+    return Number.isFinite(window?.percentRemaining) ? [`${label} ${Math.round(window.percentRemaining)}%`] : [];
+  });
+  return labels.length ? `Codex left: ${labels.join(" · ")}` : undefined;
+}
+
 export default function (pi: ExtensionAPI) {
   if (process.env.MATE_MODE === "dev") return; // No hooks, tools, commands or child processes in development sessions.
   const calm = createCalm(pi, root);
@@ -103,6 +114,8 @@ export default function (pi: ExtensionAPI) {
   let retryCount = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let quotaTimer: ReturnType<typeof setInterval> | undefined;
+  let quotaChild: ChildProcess | undefined;
   let context: ExtensionContext;
   let chain: Promise<unknown> = Promise.resolve();
   let polling = false;
@@ -179,6 +192,19 @@ export default function (pi: ExtensionAPI) {
     } finally { if (owner === generation) polling = false; }
   }
 
+  function refreshQuota(owner: number) {
+    if (stopping || owner !== generation || quotaChild) return;
+    const process = execFile("quota-axi", ["--provider", "codex", "--json"],
+      { timeout: 20_000, maxBuffer: 1_000_000 }, (error, stdout) => {
+        if (quotaChild === process) quotaChild = undefined;
+        if (stopping || owner !== generation) return;
+        let status: string | undefined;
+        try { if (!error) status = codexQuotaStatus(JSON.parse(stdout)); } catch {}
+        context.ui.setStatus("mate-quota", status);
+      });
+    quotaChild = process;
+  }
+
   function start(owner: number) {
     if (stopping || owner !== generation) return;
     const process = spawn("python3", [resolve(root, "bin/mate.py"), "serve"], { cwd: root, stdio: "pipe" });
@@ -223,7 +249,9 @@ export default function (pi: ExtensionAPI) {
 
   async function stop() {
     stopping = true; ready = false; generation++;
-    clearInterval(timer); clearTimeout(retry);
+    clearInterval(timer); clearInterval(quotaTimer); clearTimeout(retry);
+    quotaChild?.kill(); quotaChild = undefined;
+    if (context) context.ui.setStatus("mate-quota", undefined);
     failRequests("Mate session closed; inspect persisted task state after restart");
     const old = child; child = undefined;
     if (old && old.exitCode === null) {
@@ -244,6 +272,8 @@ export default function (pi: ExtensionAPI) {
     calm.sync(ctx);
     const owner = generation;
     start(owner);
+    refreshQuota(owner);
+    quotaTimer = setInterval(() => refreshQuota(owner), 300_000);
     // ponytail: 2s durable-result polling for <=2 workers; native Herdr push is supplemental.
     timer = setInterval(() => void poll(owner), 2000);
   }
