@@ -397,28 +397,36 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
       } catch (error) { ctx.ui.notify(String(error), "error"); }
     } });
 
-  pi.registerCommand("mate-approve", { description: "Human-only base/scope approval: /mate-approve TASK_ID",
+  pi.registerCommand("mate-approve", { description: "Human-only base/scope approval: /mate-approve TASK_ID [TASK_ID ...]",
     handler: async (args, ctx) => {
+      let current = "";
       try {
         if (ctx.mode !== "tui") throw new Error("Human TUI approval required");
-        const { tasks } = await rpc("status", { id: args.trim(), history: true });
-        const task = tasks[0];
-        if (task.pending_scope) {
-          if (!["review", "failed"].includes(task.state)) throw new Error("Only idle or stopped review/failed tasks can extend scope");
-          const yes = await ctx.ui.confirm("Approve additional task scope?",
-            `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may name a local target branch for clean fast-forward-only delivery from the task branch; no GitHub/remote PR merge or deploy approval. Declining discards only this pending addition.`);
-          await rpc("review_scope", { id: task.id, token: task.pending_scope.token, attempt: task.attempt, sha: task.sha, approve: yes });
-          ctx.ui.notify(yes ? "Additional scope approved; use mate_continue. No worker started." : "Pending addition discarded; approved scope unchanged", "info");
-          await poll(generation); // Durable approval event also replays after a restart.
-          return;
+        const ids = args.trim().split(/\s+/).filter(Boolean);
+        if (!ids.length || new Set(ids).size !== ids.length) throw new Error("Usage: /mate-approve TASK_ID [TASK_ID ...] (unique IDs)");
+        for (const id of ids) {
+          current = id;
+          const { tasks } = await rpc("status", { id, history: true });
+          const task = tasks[0];
+          if (!task || task.id !== id) throw new Error("Task not found");
+          if (task.pending_scope) {
+            if (!["review", "failed"].includes(task.state)) throw new Error("Only idle or stopped review/failed tasks can extend scope");
+            const yes = await ctx.ui.confirm("Approve additional task scope?",
+              `${task.id} · attempt ${task.attempt}\n${task.repo}\nBase unchanged: ${task.base} @ ${task.sha}\nBranch: ${task.branch}\nWorktree: ${task.worktree}\n\nAlready approved scope:\n${task.brief}\n\nProposed addition:\n${task.pending_scope.brief}\n\nKeep the same worktree, lease and Pi session. No reset, rebase, startup rerun or worker launch. Push/PR are authorized only if the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may name a local target branch for clean fast-forward-only delivery from the task branch; no GitHub/remote PR merge or deploy approval. Declining discards only this pending addition.`);
+            await rpc("review_scope", { id: task.id, token: task.pending_scope.token, attempt: task.attempt, sha: task.sha, approve: yes });
+            ctx.ui.notify(yes ? `${task.id}: Additional scope approved; use mate_continue. No worker started.` : `${task.id}: Pending addition discarded; approved scope unchanged. Batch stopped.`, "info");
+            await poll(generation); // Durable approval event also replays after a restart.
+            if (!yes) return;
+            continue;
+          }
+          if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
+          const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may name a local target branch for clean fast-forward-only delivery from the task branch; no GitHub/remote PR merge or deploy approval is included.`);
+          if (!yes) { ctx.ui.notify(`${task.id}: Not approved; no worktree/worker created. Batch stopped.`, "info"); return; }
+          await rpc("approve", { id: task.id, sha: task.sha, brief: task.brief });
+          ctx.ui.notify(`Approved ${task.id}; supervisor dispatch pending. No worker started.`, "info");
+          await poll(generation); // Same durable delivery, correction and replay as scope approval.
         }
-        if (task.state !== "awaiting-base") throw new Error("Task is not awaiting base or additional scope approval");
-        const yes = await ctx.ui.confirm("Approve task scope and base?", `${task.id}\n${task.repo}\n${task.base}\nCommit: ${task.sha}\nBranch: ${task.branch}\n\n${task.brief}\n\nTrust this repository, its Treehouse setup and the startup command configured in Mate? Allow a local worker to edit this isolated worktree? Push/PR are authorized only if this scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may name a local target branch for clean fast-forward-only delivery from the task branch; no GitHub/remote PR merge or deploy approval is included.`);
-        if (!yes) { ctx.ui.notify("Not approved; no worktree/worker created", "info"); return; }
-        await rpc("approve", { id: task.id, sha: task.sha, brief: task.brief });
-        ctx.ui.notify(`Approved ${task.id}; supervisor dispatch pending. No worker started.`, "info");
-        await poll(generation); // Same durable delivery, correction and replay as scope approval.
-      } catch (error) { ctx.ui.notify(String(error), "error"); }
+      } catch (error) { ctx.ui.notify(`${current ? `${current}: ` : ""}${String(error)}`, "error"); }
     } });
   pi.registerCommand("mate-complete", { description: "Human task acceptance: /mate-complete TASK_ID [--force] (also accepts idle/stopped failed tasks)",
     handler: async (args, ctx) => {

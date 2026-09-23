@@ -660,6 +660,30 @@ try {
   assert.match(notices.at(-1)[0], /lease retained/);
   assert.equal(tools.mate_dispatch.parameters.properties.same_tab_as.type, 'string');
   assert.match(tools.mate_dispatch.description, /same_tab_as/);
+  for (const id of ['batch-a', 'batch-b', 'batch-c']) await call('mate_propose', { id, repo, base: 'main', brief });
+  const seen = [];
+  await commands['mate-approve'].handler('batch-a batch-b batch-c', { ...ctx, ui: { ...ctx.ui, confirm: async (_title, body) => {
+    seen.push(body.split('\n')[0]); return seen.length !== 2;
+  } } });
+  assert.deepEqual(seen, ['batch-a', 'batch-b'], 'decline stops the batch');
+  assert.equal((await call('mate_status', { id: 'batch-a' })).tasks[0].state, 'approved');
+  for (const id of ['batch-b', 'batch-c']) assert.equal((await call('mate_status', { id })).tasks[0].state, 'awaiting-base');
+  await commands['mate-approve'].handler('batch-b batch-c', ctx);
+  for (const id of ['batch-b', 'batch-c']) assert.equal((await call('mate_status', { id })).tasks[0].state, 'approved');
+  await commands['mate-approve'].handler('batch-a batch-a', ctx);
+  assert.match(notices.at(-1)[0], /unique IDs/);
+  await commands['mate-approve'].handler('', ctx);
+  assert.match(notices.at(-1)[0], /Usage:/);
+  await commands['mate-approve'].handler('missing batch-a', ctx);
+  assert.match(notices.at(-1)[0], /missing:.*Unknown task/);
+  for (const id of ['batch-d', 'batch-e', 'batch-f']) await call('mate_propose', { id, repo, base: 'main', brief });
+  await commands['mate-approve'].handler('batch-d batch-e batch-f', { ...ctx, ui: { ...ctx.ui, confirm: async (_title, body) => {
+    if (body.startsWith('batch-e\n')) await call('mate_propose', { id: 'batch-e', repo, base: 'main', brief: revisedBrief });
+    return true;
+  } } });
+  assert.equal((await call('mate_status', { id: 'batch-d' })).tasks[0].state, 'approved');
+  for (const id of ['batch-e', 'batch-f']) assert.equal((await call('mate_status', { id })).tasks[0].state, 'awaiting-base');
+  assert.match(notices.at(-1)[0], /batch-e:.*no longer matches/);
   await handlers.session_shutdown();
   // Echo dispatch RPC in the disposable installation only, to test TS argument forwarding.
   const backend = join(root, 'bin/mate.py');

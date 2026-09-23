@@ -73,7 +73,9 @@ assume that your local remote-tracking ref is fresh. If you want the newest remo
 base, fetch it yourself before proposing the task.
 
 Run `/mate-approve TASK_ID` and review the scope, repository, branch and full SHA
-in the confirmation dialog. Declining creates no lease/pane/worker. Accepting
+in the confirmation dialog. For several tasks, use `/mate-approve ID1 ID2 ...`:
+each task gets its own confirmation; declining or an error stops the batch, while
+earlier approvals remain saved. Declining creates no lease/pane/worker. Accepting
 wakes the supervisor so it can dispatch the approved task.
 
 The worker runs **native interactive pi TUI** in a dedicated Herdr pane and a
@@ -128,7 +130,7 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 
 ## Commands
 
-- `/mate-approve ID` — human-only scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may explicitly name a local target branch for safe fast-forward delivery; GitHub/remote PR merge and deploy are never included.
+- `/mate-approve ID [ID ...]` — human-only per-task scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may explicitly name a local target branch for safe fast-forward delivery; GitHub/remote PR merge and deploy are never included.
 - `/mate-status` — show open tasks and pending events without invoking a model.
 - `/mate-list` — show only the ID and state of each open task.
 - `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits `failed`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
