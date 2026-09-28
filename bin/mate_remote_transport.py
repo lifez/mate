@@ -62,8 +62,9 @@ def settings(path, receiver=False):
         raise ValueError("Unexpected transport config fields")
     if receiver and "supervisor" in config:
         profile = config["supervisor"]
-        if not isinstance(profile, dict) or set(profile) != {"provider", "model", "effort"}:
-            raise ValueError("supervisor requires provider, model and effort")
+        if (not isinstance(profile, dict) or not {"provider", "model", "effort"} <= set(profile) or
+                set(profile) - {"harness", "provider", "model", "effort"}):
+            raise ValueError("supervisor requires provider, model and effort (optional harness)")
     inbox.identifier(config["home"])
     inbox.identifier(config["primary"])
     if receiver:

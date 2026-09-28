@@ -73,6 +73,86 @@ class MateClaudeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "inside Herdr"):
                 mc.launch([])
 
+    def test_remote_fleet_tool_wake_and_human_cli(self):
+        home = self.root / "home"
+        (home / "remotes").mkdir(parents=True)
+        fake = self.root / "transport.py"
+        fake.write_text("""import json, sys
+config = json.load(open(sys.argv[-1]))
+bodies = {}
+for line in sys.stdin:
+    frame = json.loads(line); method, params = frame['method'], frame['params']
+    reply = dict(home=config['home'])
+    if method == 'mirror': reply['result'] = dict(events=[dict(id=7, task='fix', kind='report')])
+    elif method == 'accept':
+        bodies[params['request']['id']] = params['request']['body']
+        reply['delivery'] = dict(id=params['request']['id'], state='accepted')
+    elif method == 'result':
+        reply['execution'] = dict(id=params['id'], state='done', outcome=dict(ok=True, result=dict(state='done', body=bodies[params['id']])))
+    elif method == 'ack_events': reply['result'] = dict(acknowledged=params['events'])
+    print(json.dumps(reply), flush=True)
+""")
+        route = dict(host="fixture", home=str(mc.uuid.uuid4()), primary=str(mc.uuid.uuid4()), outbox=str(self.root / "outbox"))
+        good = home / "remotes/lab.json"
+        good.write_text(json.dumps(route)); good.chmod(0o600)
+        loose = home / "remotes/loose.json"
+        loose.write_text(json.dumps(route)); loose.chmod(0o644)
+        with patch.object(mc.mate, "HOME", home), patch.object(mc.RemoteFleet, "transport", [sys.executable, str(fake)]):
+            fleet = mc.RemoteFleet()
+            try:
+                self.assertEqual(fleet.list(), ["lab", "loose"])
+                with self.assertRaisesRegex(ValueError, "private"):
+                    fleet.route("loose")
+                result = fleet.call("lab", "dispatch", {"id": "fix", "harness": "claude"})
+                self.assertEqual(result["body"], {"method": "dispatch", "params": {"id": "fix", "harness": "claude"}})
+                with self.assertRaisesRegex(ValueError, "exact displayed confirmation"):
+                    fleet.call("lab", "approve", {"id": "fix"})
+                serve = type("S", (), {"role": "primary"})()
+                with self.assertRaisesRegex(ValueError, "not model tools"):
+                    mc.remote_tool(serve, fleet, {"remote": "lab", "operation": "approve", "params": {}})
+                self.assertEqual(mc.remote_tool(serve, fleet, {"remote": "lab", "operation": "ack_events",
+                                                               "params": {"events": [7], "note": "handled"}}), {"acknowledged": [7]})
+                serve.role = "secondmate"
+                with self.assertRaisesRegex(ValueError, "primary Mate"):
+                    mc.remote_tool(serve, fleet, {"remote": "lab", "operation": "status", "params": {}})
+                found = fleet.poll()
+                self.assertEqual(found, {"lab": [{"id": 7, "task": "fix", "kind": "report"}]}, "a broken route never blocks another")
+                self.assertIn("loose", fleet.retries)
+                self.assertEqual(fleet.poll(), found, "the broken route waits for its backoff")
+            finally:
+                fleet.close()
+
+            state = {"input": json.dumps({"session_id": "s2"})}
+            with patch.object(mc, "pending_events", return_value=[]), patch.object(mc, "remote_events", return_value=found), \
+                    patch.object(mc.sys, "stdin", type("I", (), {"read": lambda self: state["input"]})()), \
+                    patch.object(mc.sys, "stderr", new_callable=__import__("io").StringIO) as err:
+                self.assertEqual(mc.wake(), 2)
+                self.assertIn('MATE REMOTE EVENT', err.getvalue())
+                self.assertIn('remote lab approve TASK', err.getvalue())
+                with patch.object(mc.time, "sleep", side_effect=RuntimeError("parked")):
+                    with self.assertRaisesRegex(RuntimeError, "parked"):
+                        mc.wake()  # Already delivered: no second wake for the same mirror event.
+
+        task = dict(id="fix", remote_home=route["home"], confirmation="a" * 64, state="awaiting-base", attempt=0, repo="/r",
+                    base="main", sha="s" * 40, branch="b", brief="Remote scope.")
+        calls = []
+        def human_call(method, params=None):
+            calls.append((method, params))
+            if method == "remote_route":
+                return route
+            if params["method"] == "status":
+                return dict(remote_home=route["home"], tasks=[task])
+            return dict(state="approved")
+        with patch.object(mc, "human_call", side_effect=human_call), patch("builtins.print") as shown:
+            mc.human(["remote", "lab", "approve", "fix"])
+            text = shown.call_args_list[0].args[0]
+            self.assertIn("Remote scope.", text)
+            code = re.search(r"--yes ([0-9a-f]{12})", text).group(1)
+            self.assertFalse(any(p and p.get("method") == "approve" for _, p in calls), "first run never mutates")
+            mc.human(["remote", "lab", "approve", "fix", "--yes", code])
+        self.assertEqual(calls[-1][1]["method"], "approve")
+        self.assertEqual(calls[-1][1]["confirmation"], "a" * 64, "the displayed remote revision is sent unchanged")
+
     def test_mcp_human_approval_and_wake_hooks(self):
         home = self.root / "home"
         env = dict(os.environ, MATE_HOME=str(home))

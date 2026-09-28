@@ -275,6 +275,12 @@ python3 bin/mate-remote-setup.py init-home /absolute/private/secondmate-home \
   --install-entrypoint
 ```
 
+For a Claude Code secondmate supervisor, use `--harness claude --model MODEL_ID`
+(provider is `anthropic`; effort defaults to `high`). Its host needs `claude` logged
+in. Start pre-trusts only the installed Mate code root for Claude, keeps one Claude
+session per home, and `recover` resumes that session when it has a transcript. The
+secondmate's own worker harness is still chosen per task.
+
 This creates a fresh home and an exclusive `~/.local/bin/mate-remote-v1` entrypoint;
 existing homes/entrypoints are never overwritten. Ensure that directory is in the
 remote noninteractive SSH PATH. For a restricted transport key, use `restrict` and
@@ -291,6 +297,9 @@ python3 bin/mate-remote-setup.py init-route omarchy --host omarchy \
 
 In the primary Pi session run `/mate-remote omarchy doctor`, then
 `/mate-remote omarchy start` and confirm the displayed home, installation and model.
+In a primary Claude session, the same commands are
+`! python3 bin/mate_claude.py remote omarchy doctor` and `... remote omarchy start`
+(first run shows the text and a token; rerun with `--yes TOKEN`).
 Doctor checks tools/configuration, not provider authentication. Linux can start its
 own named Herdr server; macOS requires that named server in a user GUI session.
 Start trusts the installed Pi project resources (`--approve`); review them first.

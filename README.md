@@ -148,7 +148,10 @@ reach them. Type them with `!` in the supervisor prompt or in another pane:
 ```
 
 Also `approve ID --decline`, `complete ID [--force]`, `close-tab ID`, `return-lease ID`,
-`cancel ID`, `status` and `list`. Each acting command needs the token from its own
+`cancel ID`, `status` and `list`. Remote secondmates work the same way: the Claude
+primary has the `mate_remote` tool and mirrored remote events wake it; each
+`/mate-remote ROUTE ...` command is `remote ROUTE ...` in this CLI. A remote
+secondmate can itself run Claude (`mate-remote-setup.py init-home --harness claude`). Each acting command needs the token from its own
 first run, so a changed task refuses a stale confirmation. Worker harness choice is
 independent: a Claude supervisor can dispatch Pi workers and the reverse. From a Claude
 supervisor, pass Pi models as `provider/model-id` (there is no Pi model registry to

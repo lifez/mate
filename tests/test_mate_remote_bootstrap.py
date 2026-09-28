@@ -1,5 +1,6 @@
 """Bootstrap ownership/journal tests; no real servers or agents are started."""
 from contextlib import closing
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -22,7 +23,7 @@ class RemoteBootstrapTests(unittest.TestCase):
         self.config = dict(home=str(uuid.uuid4()), primary=str(uuid.uuid4()), journal=str(self.home/'inbox'))
         inbox.create(self.config['journal'], self.config['home'], self.config['primary'])
         self.db = inbox.connect(self.config['journal'], self.config['home'], self.config['primary'])
-        self.profile = dict(provider='fixture', model='fixture', effort='off')
+        self.profile = dict(harness='pi', provider='fixture', model='fixture', effort='off')
         self.context = patch.object(boot, 'context', return_value=(self.home,self.home,self.profile,dict(pi='/fixture/pi',herdr='/fixture/herdr'),{}))
         self.context.start()
         self.session = 'mate-remote-' + self.config['home'].replace('-','')
@@ -88,6 +89,31 @@ class RemoteBootstrapTests(unittest.TestCase):
         self.assertEqual(len(calls),1)
         outcome=inbox.status(self.db,request['id'])['outcome']
         self.assertTrue(outcome['ok']);self.assertEqual(outcome['result']['resolved_request'],self.record['request'])
+
+    def test_claude_secondmate_trusts_root_and_keeps_one_session(self):
+        self.profile.update(harness='claude', provider='anthropic', model='claude-test', effort='high')
+        self.save(True)
+        status=dict(server=dict(session=self.session,socket=self.record['socket'],running=True,compatible=True))
+        commands=[]
+        store=self.home/'claude-config'
+        for resumed in (False, True):
+            request=self.request()
+            with patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': str(store)}), patch.object(boot,'command',return_value=status), \
+                 patch.object(boot,'live',side_effect=[False,True]), patch.object(boot.mate,'ready_pane'), \
+                 patch.object(boot.mate,'check_endpoint',return_value={'cwd':str(self.home)}), patch.object(boot.mate,'run',return_value=''), \
+                 patch.object(boot.mate,'claude_trust') as trust, \
+                 patch.object(boot.mate,'herdr',side_effect=lambda record,*args: commands.append(args[-1])):
+                boot.consume(self.db,self.config,self.home/'remote.json',request)
+            self.assertTrue(inbox.status(self.db,request['id'])['outcome']['ok'])
+            trust.assert_called_once_with(str(self.home), str(self.home))
+            session=boot.claude_session(self.config)
+            self.assertIn(('--resume ' if resumed else '--session-id ') + session, commands[-1])
+            self.assertIn('bin/mate_claude.py --model claude-test --effort high', commands[-1])
+            with patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': str(store)}):
+                transcript=boot.claude_transcript(self.home, session)
+            self.assertTrue(str(transcript).startswith(str(store)))
+            transcript.parent.mkdir(parents=True, exist_ok=True); transcript.write_text('{}\n')
+            self.record=dict(events.get(self.db,'secondmate'),submitted_at=time.time()-100); self.save(True)
 
     def test_failed_submission_remains_uncertain_and_not_retried(self):
         self.record['phase']='preflight';self.save()

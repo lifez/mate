@@ -26,7 +26,8 @@ def main():
     remote = sub.add_parser("init-home")
     remote.add_argument("path")
     remote.add_argument("--primary", required=True)
-    remote.add_argument("--provider", required=True)
+    remote.add_argument("--harness", choices=sorted(mate.HARNESSES), default="pi")
+    remote.add_argument("--provider", help="Pi provider; Claude uses anthropic")
     remote.add_argument("--model", required=True)
     remote.add_argument("--effort", default="off")
     remote.add_argument("--install-entrypoint", action="store_true")
@@ -38,7 +39,10 @@ def main():
     args = parser.parse_args()
     inbox.identifier(args.primary)
     if args.action == "init-home":
-        profile = mate.worker_profile(dict(provider=args.provider, model=args.model, effort=args.effort))
+        if args.harness == "pi" and not args.provider:
+            raise ValueError("--provider is required for a Pi secondmate")
+        profile = mate.worker_profile(dict(harness=args.harness, provider=args.provider or "anthropic", model=args.model,
+                                           effort=args.effort if args.effort != "off" or args.harness == "pi" else "high"))
         home = Path(args.path).expanduser()
         if not home.is_absolute():
             raise ValueError("Remote home must be absolute")

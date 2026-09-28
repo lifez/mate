@@ -448,11 +448,11 @@
     },
     {
       "component_ids": ["R02"],
-      "description": "Claude Code supervisor adapter: launcher with only mate_* MCP tools, an MCP server that owns mate.py serve, an asyncRewake Stop hook with the Pi wake/correction contract and newest-claim single flight, a UserPromptSubmit pending-event attachment, and a human-only CLI with per-state confirmation tokens for approve/complete/cancel/cleanup. Tool descriptions are read from the Pi extension so both supervisors share one contract.",
+      "description": "Claude Code supervisor adapter: launcher with only mate_* MCP tools, an MCP server that owns mate.py serve, an asyncRewake Stop hook with the Pi wake/correction contract and newest-claim single flight, a UserPromptSubmit pending-event attachment, and a human-only CLI with per-state confirmation tokens for approve/complete/cancel/cleanup. Tool descriptions are read from the Pi extension so both supervisors share one contract. Remote secondmates: a Python twin of the Pi remote fleet gives the Claude primary mate_remote, mirrored-event wakes and token-confirmed remote human commands; a secondmate home may run a Claude supervisor (setup --harness claude).",
       "source_commit": "3c2a91d70e07b48c982a8fe3460ba367795bb5d3",
       "reviewed_scope": "Claude Stop asyncRewake wake ownership only (no dedup across firings; timeout-killed hooks do not rewake); reference-only, no watcher stack copied.",
       "sources": [{ "path": "bin/fm-claude-stop-autoarm.sh", "blob": "2e7d0ac8f2eb956b34d2ede8c0d95ecdeb1a2195", "mode": "reference-only" }],
-      "paths": ["bin/mate_claude.py", "tests/test_mate_claude.py", "README.md", "AGENTS.md"],
+      "paths": ["bin/mate_claude.py", "tests/test_mate_claude.py", "README.md", "AGENTS.md", "CONFIGURATION.md", "bin/mate-remote-setup.py", "bin/mate_remote_bootstrap.py", "bin/mate_remote_transport.py", ".pi/extensions/lib/remote.ts", "tests/test_mate_remote_bootstrap.py", "tests/test_mate_remote_setup.py"],
       "local_commit": null
     }
   ],

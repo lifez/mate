@@ -7,7 +7,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import re
 import time
+import uuid
 
 import mate as mate
 import mate_remote as inbox
@@ -22,13 +24,14 @@ def context(config, config_path):
         raise ValueError("Bootstrap requires the bound home's remote.json")
     home = path.parent
     profile = mate.worker_profile(config.get("supervisor", {}))
-    tools = {name: shutil.which(name) for name in ("pi", "git", "treehouse", "herdr")}
+    agent = profile["harness"]  # pi or claude runs the secondmate supervisor.
+    tools = {name: shutil.which(name) for name in (agent, "git", "treehouse", "herdr")}
     if not all(tools.values()):
         raise ValueError("Missing remote tools: " + ", ".join(k for k, v in tools.items() if not v))
     mate.mate_config()  # Validate trusted installed config before external creation.
     root = Path(__file__).resolve().parents[1]
-    if not (root / ".pi/extensions/mate-supervisor.ts").is_file():
-        raise ValueError("Remote Mate supervisor extension is not installed")
+    if not (root / (".pi/extensions/mate-supervisor.ts" if agent == "pi" else "bin/mate_claude.py")).is_file():
+        raise ValueError("Remote Mate supervisor adapter is not installed")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MATE_", "HERDR_"))}
     # A fixture or operator may select a Herdr config, but never a caller's pane.
     if os.environ.get("HERDR_CONFIG_PATH"):
@@ -45,7 +48,7 @@ def inspect(db, config, path):
     try:
         home, root, profile, tools, _ = context(config, path)
         readiness = dict(ready=True, home_path=str(home), code_root=str(root), profile=profile, tools=tools,
-                         credentials="not probed; use remote Pi authentication")
+                         credentials=f"not probed; use remote {profile['harness']} authentication")
     except Exception as exc:
         readiness = dict(ready=False, error=str(exc))
     return dict(**readiness, endpoint=record, heartbeat=events.get(db, "heartbeat"),
@@ -73,6 +76,16 @@ def live(db, record, home):
         return pane.get("terminal_id") == record["terminal_id"]
     guard.close()
     return False
+
+
+def claude_session(config):
+    """Stable per-home Claude session, like secondmate.jsonl for Pi, so recovery resumes one conversation."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "mate-secondmate:" + config["home"]))
+
+
+def claude_transcript(root, session):
+    store = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    return store / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root)) / (session + ".jsonl")
 
 
 def launch(db, config, path, request):
@@ -132,7 +145,7 @@ def launch(db, config, path, request):
             if pane.get("cwd") != str(root):
                 raise ValueError("Secondmate shell cwd changed; restore the installed root before recovery")
             # Refuse detached agents still referencing the private session file.
-            session_file = str(home / "secondmate.jsonl")
+            session_file = str(home / "secondmate.jsonl") if profile["harness"] == "pi" else claude_session(config)
             if session_file in mate.run(["ps", "-axo", "args="]):
                 raise ValueError("Possible orphan secondmate session remains")
         else:
@@ -147,9 +160,17 @@ def launch(db, config, path, request):
             with db:
                 events.put(db, "secondmate", dict(record, phase="preflight"))
             mate.wait_ready_pane(record, 5)
-        argv = ["env", "MATE_MODE=supervisor", f"MATE_HOME={home}", tools["pi"], "--approve", "--tui-mode", "regular",
-                "--provider", profile["provider"], "--model", profile["model"], "--thinking", profile["effort"],
-                "--session", str(home / "secondmate.jsonl"), "--no-prompt-templates"]
+        if profile["harness"] == "claude":
+            # Nobody is present to answer the trust dialog for Mate's own code root.
+            mate.claude_trust(str(root), str(root))
+            session_id = claude_session(config)
+            resume = claude_transcript(root, session_id).exists()  # A never-prompted session has no transcript.
+            argv = ["env", "MATE_MODE=supervisor", f"MATE_HOME={home}", sys.executable, str(root / "bin/mate_claude.py"),
+                    "--model", profile["model"], "--effort", profile["effort"], "--resume" if resume else "--session-id", session_id]
+        else:
+            argv = ["env", "MATE_MODE=supervisor", f"MATE_HOME={home}", tools["pi"], "--approve", "--tui-mode", "regular",
+                    "--provider", profile["provider"], "--model", profile["model"], "--thinking", profile["effort"],
+                    "--session", str(home / "secondmate.jsonl"), "--no-prompt-templates"]
         previous_request = record.get("request")
         record = dict(record, phase="submitted", request=request["id"], profile=profile, submitted_at=time.time())
         with db:
