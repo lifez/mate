@@ -12,6 +12,10 @@ This file describes how to develop the repository, not a request to start worker
 - Plain `pi` loads the trusted project's supervisor extension. When Mate's
   supervisor tools are active, its injected `SUPERVISOR.md` policy takes precedence:
   delegate project work and do not bypass its tool allowlist.
+- `python3 bin/mate_claude.py` starts the Claude Code supervisor. Plain `claude` here
+  is a normal coding session: Mate adds no project Claude settings, hooks or MCP.
+  Smoke tests run inside a Herdr pane inherit its identity: strip `HERDR_*` or a
+  supervisor dispatch launches a real worker tab.
 - `WORKER.md` is policy for explicitly launched delegated workers only. Merely
   reading it or opening this repository does not turn you into a worker.
 - Do not bootstrap Mate or launch its control plane/workers just to edit code.

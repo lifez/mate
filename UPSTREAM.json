@@ -445,6 +445,15 @@
       "sources": [{ "path": "bin/fm-claude-trust.sh", "blob": "6e1a49a9776249c50914e3ac28dea3d9a3f229b9", "mode": "reference-only" }, { "path": "bin/fm-spawn.sh", "blob": "ec71e91c2a1dbf788404a6370539053e39995a5b", "mode": "reference-only" }],
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "CONFIGURATION.md", "SUPERVISOR.md", "WORKER.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
       "local_commit": null
+    },
+    {
+      "component_ids": ["R02"],
+      "description": "Claude Code supervisor adapter: launcher with only mate_* MCP tools, an MCP server that owns mate.py serve, an asyncRewake Stop hook with the Pi wake/correction contract and newest-claim single flight, a UserPromptSubmit pending-event attachment, and a human-only CLI with per-state confirmation tokens for approve/complete/cancel/cleanup. Tool descriptions are read from the Pi extension so both supervisors share one contract.",
+      "source_commit": "3c2a91d70e07b48c982a8fe3460ba367795bb5d3",
+      "reviewed_scope": "Claude Stop asyncRewake wake ownership only (no dedup across firings; timeout-killed hooks do not rewake); reference-only, no watcher stack copied.",
+      "sources": [{ "path": "bin/fm-claude-stop-autoarm.sh", "blob": "2e7d0ac8f2eb956b34d2ede8c0d95ecdeb1a2195", "mode": "reference-only" }],
+      "paths": ["bin/mate_claude.py", "tests/test_mate_claude.py", "README.md", "AGENTS.md"],
+      "local_commit": null
     }
   ],
   "checks": [

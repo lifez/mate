@@ -122,6 +122,41 @@ the saved session. Quitting during a round without settled evidence is a failure
 not inferred completion. A report becomes **review**, never automatic task completion.
 Code verification/research/review must themselves be delegated.
 
+## Start with Claude Code as supervisor
+
+The same Mate runtime can use Claude Code as the supervisor instead of Pi. Run inside
+a Herdr pane, with `claude` logged in:
+
+```sh
+cd /Users/win/mine/mate
+python3 bin/mate_claude.py            # extra arguments pass to claude, e.g. --model opus
+```
+
+It starts `claude` with only the `mate_*` tools (an MCP server that owns `mate.py
+serve`, `--tools ""`, `--strict-mcp-config`), `SUPERVISOR.md` plus dispatch rules
+and saved notes as appended system prompt, and two hooks: an `asyncRewake` Stop hook
+that wakes Claude on new durable events (one correction for unhandled events, newest
+Stop claim wins) and a UserPromptSubmit hook that attaches still-unhandled events.
+Only one supervisor (Pi or Claude) can own a `MATE_HOME` at a time.
+
+Human-only actions are a CLI, not slash commands, because the Claude model must not
+reach them. Type them with `!` in the supervisor prompt or in another pane:
+
+```sh
+! python3 bin/mate_claude.py approve ID          # shows scope/base and a one-time token
+! python3 bin/mate_claude.py approve ID --yes TOKEN
+```
+
+Also `approve ID --decline`, `complete ID [--force]`, `close-tab ID`, `return-lease ID`,
+`cancel ID`, `status` and `list`. Each acting command needs the token from its own
+first run, so a changed task refuses a stale confirmation. Worker harness choice is
+independent: a Claude supervisor can dispatch Pi workers and the reverse. From a Claude
+supervisor, pass Pi models as `provider/model-id` (there is no Pi model registry to
+resolve bare IDs; Pi reports an unknown model at launch). Calm, `/stow`, `/bearings`
+and the Codex quota footer are Pi-only.
+
+Plain `claude` in this repository is a normal coding session: nothing loads Mate.
+
 ## Task briefs
 
 New proposals and scope additions use five concise sections: **User intent**
