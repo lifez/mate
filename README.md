@@ -155,8 +155,10 @@ secondmate can itself run Claude (`mate-remote-setup.py init-home --harness clau
 first run, so a changed task refuses a stale confirmation. Worker harness choice is
 independent: a Claude supervisor can dispatch Pi workers and the reverse. From a Claude
 supervisor, pass Pi models as `provider/model-id` (there is no Pi model registry to
-resolve bare IDs; Pi reports an unknown model at launch). Calm, `/stow`, `/bearings`
-and the Codex quota footer are Pi-only.
+resolve bare IDs; Pi reports an unknown model at launch). `/stow` is `/mate:stow`
+(a session-only plugin generated in `MATE_HOME`, same request text as Pi). After it
+saves, exit and start `bin/mate_claude.py` again: saved notes load at launch, so
+`/clear` would keep the old notes. Calm, `/bearings` and the Codex quota footer are Pi-only.
 
 Plain `claude` in this repository is a normal coding session: nothing loads Mate.
 

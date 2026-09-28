@@ -68,6 +68,24 @@ class MateClaudeTests(unittest.TestCase):
         self.assertEqual(mc.continue_profile({"model": "anthropic/c2"}, {"harness": "claude", "provider": "anthropic"}),
                          {"provider": "anthropic", "model": "c2"})
 
+    def test_stow_command_reuses_pi_request_with_claude_reset(self):
+        text = mc.stow_prompt()
+        self.assertIn("Stow this Mate conversation now.", text)
+        self.assertIn("mate_memory action=save", text)
+        self.assertIn("run `python3 bin/mate_claude.py` again", text)
+        self.assertNotIn("/new loads", text)
+        home = self.root / "home"
+        with patch.object(mc.mate, "HOME", home), patch.dict(os.environ, {"HERDR_ENV": "1"}), \
+                patch.object(mc, "policy", return_value="policy"), patch.object(mc.os, "chdir"), \
+                patch.object(mc.os, "execvpe") as launched:
+            mc.launch(["--model", "opus"])
+        argv = launched.call_args.args[1]
+        folder = Path(argv[argv.index("--plugin-dir") + 1])
+        self.assertEqual(folder, home / "claude-plugin")
+        self.assertEqual(json.loads((folder / ".claude-plugin/plugin.json").read_text())["name"], "mate")
+        self.assertIn(text, (folder / "commands/stow.md").read_text())
+        self.assertEqual(argv[-2:], ["--model", "opus"])
+
     def test_launch_requires_herdr(self):
         with patch.dict(os.environ, {"HERDR_ENV": ""}):
             with self.assertRaisesRegex(ValueError, "inside Herdr"):
