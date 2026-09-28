@@ -472,6 +472,7 @@ notice ที่ [third_party/firstmate/LICENSE](third_party/firstmate/LICENSE) 
 - R07: adapt focused Calm presentation; ไม่รับ full Firstmate UI/private patches
 - Upstream default-branch reset: reject สำหรับ Mate; ใช้ human-approved SHA
 - Full watcher stack, remote/Relay/multi-harness, auto-cleanup: ไม่รับในรุ่นแรก
+- Worker harness (pi/claude ต่อ task): implement เอง; ใช้ Firstmate fm-claude-trust.sh/fm-spawn.sh เป็น reference-only ไม่ copy code; supervisor ยังเป็น Pi อย่างเดียว
 - Real OpenAI subscription E2E: ยังไม่ได้รัน ไม่ถือว่าผ่านจาก fake-model smoke
 
 ต่อหนึ่ง update บันทึก: Rxx, old/candidate commits, change set, decision/reason,

@@ -24,6 +24,9 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 HOME = Path(os.environ.get("MATE_HOME", ROOT / "data")).expanduser().resolve()
 CONFIG = ROOT / "mate.config.json"
+# Worker harness -> supported effort levels. The task keeps its harness for life.
+HARNESSES = {"pi": ("off", "minimal", "low", "medium", "high", "xhigh", "max"),
+             "claude": ("low", "medium", "high", "xhigh", "max")}
 NEW_PANE_READY_TIMEOUT = 5
 
 
@@ -127,19 +130,23 @@ def check_resident(task):
     check_lease(task)
 
 
-def worker_control(task, action, **params):
-    """One submission to the exact private Pi endpoint. Never retry on a lost reply."""
-    control = task["worker_control"]
-    request = dict(action=action, generation=control["generation"], attempt=task["attempt"], **params)
+def control_exchange(path, request, timeout=20):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(20)
-        conn.connect(control["socket"])
+        conn.settimeout(timeout)
+        conn.connect(path)
         conn.sendall((json.dumps(request) + "\n").encode())
         with conn.makefile("rb") as stream:
             line = stream.readline(65537)
         if len(line) > 65536 or not line.endswith(b"\n"):
             raise ValueError("Invalid worker control reply")
-        reply = json.loads(line)
+        return json.loads(line)
+
+
+def worker_control(task, action, **params):
+    """One submission to the exact private worker endpoint. Never retry on a lost reply."""
+    control = task["worker_control"]
+    request = dict(action=action, generation=control["generation"], attempt=task["attempt"], **params)
+    reply = control_exchange(control["socket"], request)
     if reply.get("generation") != control["generation"] or reply.get("attempt") != task["attempt"] or reply.get("ok") is not True:
         raise ValueError(reply.get("error", "Worker control identity mismatch"))
     return reply
@@ -229,9 +236,11 @@ def mate_config():
     if not isinstance(config, dict) or set(config) - {"worker", "dispatch", "projects"}:
         raise ValueError("Invalid Mate config")
     worker = config.get("worker", {})
-    efforts = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
-    if not isinstance(worker, dict) or set(worker) - {"model", "effort", "max_active", "workspace_per_task"}:
+    if not isinstance(worker, dict) or set(worker) - {"harness", "model", "effort", "max_active", "workspace_per_task"}:
         raise ValueError("Invalid worker config")
+    if worker.get("harness", "pi") not in HARNESSES:
+        raise ValueError("Invalid worker.harness")
+    efforts = HARNESSES[worker.get("harness", "pi")]
     if "model" in worker and (not isinstance(worker["model"], str) or not worker["model"].strip() or worker["model"] != worker["model"].strip()):
         raise ValueError("Invalid worker.model")
     if "effort" in worker and (not isinstance(worker["effort"], str) or worker["effort"] not in efforts):
@@ -258,11 +267,12 @@ def mate_config():
                 if rule["why"] != rule["why"].strip():
                     raise ValueError("Invalid dispatch rule why")
             use = rule.get("use")
-            if not isinstance(use, dict) or set(use) != {"model", "effort"}:
+            if (not isinstance(use, dict) or set(use) - {"harness", "model", "effort"} or
+                    not {"model", "effort"} <= set(use) or use.get("harness", "pi") not in HARNESSES):
                 raise ValueError("Invalid dispatch profile")
             text(use["model"], "dispatch profile model", 1000)
             if (use["model"] != use["model"].strip() or not isinstance(use["effort"], str)
-                    or use["effort"] not in efforts):
+                    or use["effort"] not in HARNESSES[use.get("harness", "pi")]):
                 raise ValueError("Invalid dispatch profile")
     return config
 
@@ -476,14 +486,22 @@ def check_capacity(db, inspected=None):
 
 def worker_profile(p, previous=None):
     previous = previous or {}
+    saved = previous.get("harness", "pi") if "provider" in previous else None  # Legacy tasks are Pi.
+    harness = p.get("harness", saved or "pi")
+    if harness not in HARNESSES:
+        raise ValueError("Invalid harness")
+    if saved and harness != saved:
+        raise ValueError("A task keeps its worker harness; propose a new task to use another")
     profile = {key: text(p.get(key, previous.get(key)), key, 256) for key in ("provider", "model")}
     for value in profile.values():
         if value.startswith("-") or any(c.isspace() for c in value):
             raise ValueError("Provider/model must be identifiers, not CLI options")
-    effort = p.get("effort", previous.get("effort", "off"))
-    if effort not in ("off", "minimal", "low", "medium", "high", "xhigh", "max"):
-        raise ValueError("Invalid effort")
-    return dict(profile, effort=effort)
+    if harness == "claude" and profile["provider"] != "anthropic":
+        raise ValueError("Claude workers use provider anthropic")
+    effort = p.get("effort", previous.get("effort", "off" if harness == "pi" else "high"))
+    if effort not in HARNESSES[harness]:
+        raise ValueError(f"Invalid {harness} effort")
+    return dict(profile, harness=harness, effort=effort)
 
 
 def dispatch(db, p):
@@ -529,12 +547,12 @@ def dispatch(db, p):
             task["workspace"] = task["split_target"]["workspace"]
     if task.get("same_tab_as"):
         check_split_target(task)
-    pi_binary = shutil.which("pi")
-    if not pi_binary:
-        raise ValueError("pi is not on PATH")
+    binary = shutil.which(profile["harness"])
+    if not binary:
+        raise ValueError(f"{profile['harness']} is not on PATH")
     if not task.get("recoveries"):
         task.update(project=project.get("name"), startup=project.get("startup"))
-    task.update(pi_binary=pi_binary, **profile, state="acquiring",
+    task.update({profile["harness"] + "_binary": binary}, **profile, state="acquiring",
                 attempt=task["attempt"] + 1, holder=f"mate:{uuid.uuid4().hex}")
     with db:
         db.execute("BEGIN IMMEDIATE")
@@ -615,7 +633,7 @@ def dispatch(db, p):
 CANCELLATION_EXECUTION_FIELDS = (
     "lease", "worktree", "startup_state", "startup_started_at", "startup_finished_at",
     "startup_pid", "startup_exit_code", "endpoint_receipt", "pane", "tab", "session",
-    "socket", "workspace", "pi_binary", "holder", "usage", "followup", "error",
+    "socket", "workspace", "pi_binary", "claude_binary", "claude_session", "holder", "usage", "followup", "error",
     "missing_from", "recoveries", "launch_recoveries", "launch_stage")
 
 
@@ -1027,6 +1045,8 @@ def inspect_missing_launch(db, task):
                for pid, row in processes.items() if pid != shell):
             raise ValueError("Possible task/worktree process remains; recovery refused")
         return True
+    if task.get("harness") == "claude":
+        raise ValueError("Only Pi continuations recover automatically; inspect the Claude pane and processes")
     session = folder / "session.jsonl"
     if session.is_symlink():
         raise ValueError("Saved Pi session path changed")
@@ -1451,10 +1471,10 @@ def snapshot(db, p):
             return result
     # Do not send every brief/receipt repeatedly into model context.
     if not p.get("id"):
-        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "provider", "model", "effort", "worktree", "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope")), "worker_resident": resident_alive(t)} for t in result["tasks"]]
+        result["tasks"] = [{k: t[k] for k in ("id", "state", "base", "base_branch", "project", "startup_state", "sha", "attempt", "harness", "provider", "model", "effort", "worktree", "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab", "same_tab_as", "error", "completed_at", "completed_by", "completed_via", "completed_from", "cancelled_at", "cancelled_by", "cancelled_via", "tab_close_state", "tab_closed_at", "tab_closed_by", "tab_close_error") if k in t} | {"usage_total": usage_total(t), "scope_pending": bool(t.get("pending_scope")), "worker_resident": resident_alive(t)} for t in result["tasks"]]
     else:
         fields = ("id", "state", "updated", "repo", "base", "base_branch", "sha", "branch", "brief",
-                  "attempt", "approved_at", "provider", "model", "effort", "worktree",
+                  "attempt", "approved_at", "harness", "provider", "model", "effort", "worktree",
                   "launcher_workspace", "workspace", "workspace_per_task", "pane", "tab",
                   "same_tab_as", "error", "missing_from", "launch_stage", "pending_scope", "worker_stop_error",
                   "startup", "startup_state", "startup_started_at", "startup_finished_at", "startup_pid", "startup_exit_code",
@@ -1757,6 +1777,232 @@ class WorkerRounds:
         self.guard = None
 
 
+CLAUDE_HOOKS = ("UserPromptSubmit", "PreToolUse", "Stop", "StopFailure")
+CLAUDE_SESSION_ENV = ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_CODE_SESSION_ID",
+                      "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT",
+                      "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN")
+
+
+def claude_trust(worktree, repo):
+    """Pre-accept only this leased worktree: Claude's trust dialog would wedge the pane."""
+    store = (Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json").resolve()
+    data = json.loads(store.read_text()) if store.exists() else {}
+    projects = data.setdefault("projects", {})
+    entry = projects.setdefault(worktree, {})
+    wanted = dict(hasTrustDialogAccepted=True)
+    # Carry forward only consent the human already gave for the primary checkout.
+    if projects.get(repo, {}).get("hasClaudeMdExternalIncludesApproved") is True:
+        wanted.update(hasClaudeMdExternalIncludesApproved=True, hasClaudeMdExternalIncludesWarningShown=True)
+    if all(entry.get(k) == v for k, v in wanted.items()):
+        return
+    entry.update(wanted)
+    temporary = store.with_name(f".{store.name}.mate-{uuid.uuid4().hex}")
+    temporary.write_text(json.dumps(data, indent=2) + "\n")
+    temporary.replace(store)
+
+
+def claude_usage(db, ident, attempt, transcript, offset):
+    """Count each finalized assistant message once; Claude reports tokens but no cost."""
+    try:
+        with open(transcript, "rb") as stream:
+            stream.seek(offset)
+            lines = stream.read().splitlines()
+    except OSError:
+        return
+    messages = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "assistant" else None
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            messages[message.get("id") or len(messages)] = message["usage"]  # Streamed blocks repeat one id.
+    for usage in messages.values():
+        record_usage(db, ident, attempt, dict(usage=dict(
+            input=usage.get("input_tokens"), output=usage.get("output_tokens"),
+            cacheRead=usage.get("cache_read_input_tokens", 0), cacheWrite=usage.get("cache_creation_input_tokens", 0))))
+
+
+def claude_hook(name):
+    """Claude hook process: forward one event to the wrapper that owns this worker."""
+    blocking = name in ("UserPromptSubmit", "PreToolUse")
+    try:
+        if name not in CLAUDE_HOOKS:
+            raise ValueError("Unknown Mate hook")
+        control = json.loads(os.environ["MATE_WORKER_CONTROL"])
+        data = sys.stdin.read(4 * 1024 * 1024 + 1)
+        if len(data) > 4 * 1024 * 1024:
+            raise ValueError("Claude hook input exceeded 4 MiB")
+        reply = control_exchange(control["socket"], dict(hook=name, generation=control["generation"],
+                                                         input=json.loads(data or "{}")), timeout=55)
+        if reply.get("ok") is not True:
+            raise ValueError(reply.get("error", "Mate refused this worker event"))
+        if reply.get("context"):
+            print(json.dumps(dict(hookSpecificOutput=dict(hookEventName=name, additionalContext=reply["context"]))))
+        return 0
+    except Exception as exc:
+        print(f"Mate: {exc}", file=sys.stderr)
+        return 2 if blocking else 1  # Exit 2 blocks the prompt/tool; never force Claude to keep going.
+
+
+def run_claude(db, task, rounds, prompt, policy):
+    """Claude owns the TTY. Its hooks and supervisor control share one private socket."""
+    ident, folder, control = task["id"], HOME / task["id"], task["worker_control"]
+    claude_trust(task["worktree"], task["repo"])
+    resume = bool(task.get("claude_session"))
+    if not resume:
+        with db:
+            task = load(db, ident)
+            task["claude_session"] = str(uuid.uuid4())
+            save(db, task)
+    session = task["claude_session"]
+    hook = shlex.join([sys.executable, str(ROOT / "bin/mate.py"), "hook"])
+    settings = json.dumps(dict(feedbackDrafts="off", attribution=dict(commit="", pr="", sessionUrl=False), hooks={
+        name: [dict(hooks=[dict(type="command", command=f"{hook} {name}", timeout=60)])] for name in CLAUDE_HOOKS}))
+    # A supervisor's inherited Claude session markers make the worker a child session
+    # that saves no transcript, so --resume would find no conversation.
+    env = {k: v for k, v in os.environ.items() if k not in CLAUDE_SESSION_ENV}
+    env.update(MATE_MODE="dev", MATE_WORKER_CONTROL=json.dumps(control),
+               CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION="false", CLAUDE_CODE_SEND_FEEDBACK="0")
+    state = dict(pending=None, closing=False, admitted=False, offset=None, transcript=None)
+
+    def spawn(message, resume, profile):
+        args = [task["claude_binary"], "--dangerously-skip-permissions", "--settings", settings,
+                "--append-system-prompt", policy, "--model", profile["model"], "--effort", profile["effort"],
+                "--resume" if resume else "--session-id", session, "--", message]
+        with (folder / f"stderr-{rounds.attempt}.log").open("a") as err:
+            return subprocess.Popen(args, cwd=task["worktree"], stderr=err, env=env)
+
+    def stop(child):
+        child.terminate()
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+            raise ValueError("Claude did not exit after SIGTERM")
+        subprocess.run(["stty", "sane"], stderr=subprocess.DEVNULL)  # Restore the pane after a TUI exit.
+
+    def hook_event(name, data):
+        if data.get("session_id") != session:
+            raise ValueError("Worker session identity changed; keep the assigned Claude session")
+        with (folder / f"events-{rounds.attempt}.jsonl").open("a") as log:
+            log.write(json.dumps(dict(type=name, tool=data.get("tool_name"), at=time.time())) + "\n")
+        transcript = data.get("transcript_path")
+        if not isinstance(transcript, str) or Path(transcript).name != session + ".jsonl":
+            transcript = None
+        if name == "UserPromptSubmit":
+            if state["closing"]:
+                raise ValueError("Worker is shutting down")
+            joining = state["admitted"]  # Mid-round input joins the current round.
+            admitted = rounds.admit(dict(request=state["pending"]) if state["pending"] else {})
+            state["pending"], state["admitted"] = None, True
+            if not joining:
+                state["transcript"] = transcript
+                state["offset"] = os.path.getsize(transcript) if transcript and os.path.exists(transcript) else 0
+            return "Current human-approved task scope (follow-ups cannot expand it):\n" + admitted["brief"]
+        if name == "PreToolUse":
+            if not state["admitted"] or rounds.guard is None or state["closing"]:
+                raise ValueError("No admitted Mate worker round")
+            return None
+        if not state["admitted"] or rounds.guard is None:
+            return None  # Duplicate or unadmitted stop is not a new outcome.
+        state["admitted"] = False
+        text_ = data.get("last_assistant_message") or ""
+        rounds.last = dict(content=[dict(type="text", text=text_)], stopReason="stop" if name == "Stop" else "error")
+        if state["transcript"]:
+            claude_usage(db, ident, rounds.attempt, state["transcript"], state["offset"])
+        rounds.publish("" if name == "Stop" else
+                       f"Claude StopFailure: {data.get('error')}: {data.get('error_details') or ''}".strip())
+        return None
+
+    def supervisor_command(command, child):
+        if command.get("generation") != control["generation"] or type(command.get("attempt")) is not int or command["attempt"] < 1:
+            raise ValueError("Stale worker control identity")
+        if state["closing"] or state["pending"] or rounds.guard is not None:
+            raise ValueError("Claude is not idle")
+        if command["attempt"] != rounds.attempt + (command.get("action") == "continue"):
+            raise ValueError("Stale worker attempt")
+        if command.get("action") == "shutdown":
+            state["closing"] = True
+            return child
+        message = command.get("message")
+        if (command.get("action") != "continue" or not isinstance(command.get("request"), str) or
+                not re.fullmatch(r"[a-f0-9]{32}", command["request"]) or not isinstance(message, str) or
+                not message.strip() or len(message) > 20000):
+            raise ValueError("Invalid continuation")
+        profile = worker_profile(command, load(db, ident))
+        # Claude has no private input channel: restart it on the same saved session.
+        stop(child)
+        state["pending"] = command["request"]
+        return spawn(message, True, profile)
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(control["socket"])
+    server.listen(8)
+    server.settimeout(0.2)
+    child = spawn(prompt, resume, worker_profile(task))
+    if task.get("launch_recoveries"):
+        with db:
+            event(db, task, "worker-started", "Claude process started in the saved endpoint/worktree; not verified completion.")
+
+    def interrupted(_sig, _frame):
+        if child.poll() is None:
+            child.terminate()
+        raise InterruptedError("Worker interrupted")
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    try:
+        while child.poll() is None:
+            try:
+                conn, _ = server.accept()
+            except socket.timeout:
+                continue
+            with conn:
+                conn.settimeout(20)
+                reply, after = dict(ok=True), None
+                try:
+                    with conn.makefile("rb") as stream:
+                        line = stream.readline(4 * 1024 * 1024 + 1)
+                    if len(line) > 4 * 1024 * 1024 or not line.endswith(b"\n"):
+                        raise ValueError("Invalid worker message")
+                    item = json.loads(line)
+                    if "hook" in item:
+                        if item.get("generation") != control["generation"]:
+                            raise ValueError("Stale worker control identity")
+                        context = hook_event(item["hook"], item.get("input") or {})
+                        if context:
+                            reply["context"] = context
+                    else:
+                        reply.update(generation=control["generation"], attempt=item.get("attempt"))
+                        after = supervisor_command(item, child)
+                except (ValueError, RuntimeError, OSError) as exc:
+                    reply = dict(ok=False, error=str(exc), generation=control["generation"])
+                conn.sendall((json.dumps(reply) + "\n").encode())
+            if after is child:  # Shutdown replies before Claude exits, like Pi.
+                stop(child)
+            elif after is not None:
+                child = after
+    except Exception as exc:
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        return str(exc), True  # A killed Claude may have left tool subprocesses behind.
+    finally:
+        server.close()
+    code = child.wait()
+    if state["closing"]:
+        return "", False
+    if code or not rounds.settled:
+        return f"Claude exit={code}, settled={rounds.settled}. See stderr-{rounds.attempt}.log", code < 0
+    return "", False
+
+
 def worker(ident, attempt):
     db = connect()
     task = load(db, ident)
@@ -1785,75 +2031,79 @@ def worker(ident, attempt):
     if task.get("scope_history"):
         prompt = "Current human-approved scope (including additions):\n" + task["brief"] + "\n\nContinuation instructions (within this scope only):\n" + prompt
     policy = (ROOT / "WORKER.md").read_text()
-    args = [task["pi_binary"], "--tui-mode", "regular", "--no-prompt-templates",
-            "-e", str(ROOT / "bin/worker-events.ts"),
-            "--approve", "--provider", task["provider"], "--model", task["model"],
-            "--session", str(session), "--append-system-prompt", policy]
-    if "effort" in task:  # Legacy in-flight tasks keep their existing CLI/session defaults.
-        args += ["--thinking", worker_profile(task)["effort"]]
-    args += ["--", prompt]
     child = None
     error = ""
     uncertain = False
-    read_fd, write_fd = os.pipe()
-    reply_read, reply_write = os.pipe()
+    name = "Claude" if task.get("harness") == "claude" else "Pi"
     try:
-        # Keep stdin/stdout and the foreground process group attached to Herdr's TTY.
-        # The private pipe carries events only; never parse or suppress Pi's terminal UI.
-        with os.fdopen(read_fd) as stream, os.fdopen(reply_write, "w") as replies, (folder / f"stderr-{attempt}.log").open("w") as err:
-            try:
-                child = subprocess.Popen(args, cwd=task["worktree"], stderr=err,
-                                         # Reuse Mate's no-supervisor mode; other extensions/skills still load.
-                                         env=dict(os.environ, MATE_MODE="dev", MATE_EVENT_FD=str(write_fd),
-                                                  MATE_REPLY_FD=str(reply_read), MATE_WORKER_CONTROL=json.dumps(task["worker_control"]),
-                                                  MATE_SESSION_FILE=str(session), MATE_ATTEMPT=str(attempt)),
-                                         pass_fds=(write_fd, reply_read))
-                if task.get("launch_recoveries"):
-                    with db:
-                        event(db, task, "worker-started", "Pi process started in the saved endpoint/worktree; not verified completion.")
-            finally:
-                os.close(write_fd)
-                os.close(reply_read)
-            def stop(_sig, _frame):
-                nonlocal uncertain
-                uncertain = True
-                if child.poll() is None:
-                    child.terminate()
-                raise InterruptedError("Worker interrupted")
-            signal.signal(signal.SIGTERM, stop)
-            signal.signal(signal.SIGINT, stop)
-            for line in iter(lambda: stream.readline(4 * 1024 * 1024 + 1), ""):
-                if len(line) > 4 * 1024 * 1024:
-                    raise ValueError("Pi JSON event exceeded 4 MiB; see worker log")
-                item = json.loads(line)
-                if item.get("type") == "mate_admit":
-                    try:
-                        reply = dict(ok=True, **rounds.admit(item))
-                    except (ValueError, RuntimeError, OSError) as exc:
-                        reply = dict(ok=False, error=str(exc))
-                    replies.write(json.dumps(reply) + "\n")
-                    replies.flush()
-                    continue
-                with (folder / f"events-{rounds.attempt}.jsonl").open("a") as log:
-                    log.write(line)
-                if item.get("type") == "message_end" and item.get("message", {}).get("role") == "assistant":
-                    if rounds.guard is None:
-                        raise ValueError("Assistant output outside an admitted worker round")
-                    rounds.last = item["message"]
-                    record_usage(db, ident, rounds.attempt, rounds.last)
-                if item.get("type") == "agent_settled":
-                    rounds.publish()
-                    if item.get("reply"):
-                        replies.write(json.dumps(dict(ok=True, attempt=rounds.attempt)) + "\n")
+        if name == "Claude":
+            error, uncertain = run_claude(db, task, rounds, prompt, policy)
+        else:
+            args = [task["pi_binary"], "--tui-mode", "regular", "--no-prompt-templates",
+                    "-e", str(ROOT / "bin/worker-events.ts"),
+                    "--approve", "--provider", task["provider"], "--model", task["model"],
+                    "--session", str(session), "--append-system-prompt", policy]
+            if "effort" in task:  # Legacy in-flight tasks keep their existing CLI/session defaults.
+                args += ["--thinking", worker_profile(task)["effort"]]
+            args += ["--", prompt]
+            read_fd, write_fd = os.pipe()
+            reply_read, reply_write = os.pipe()
+            # Keep stdin/stdout and the foreground process group attached to Herdr's TTY.
+            # The private pipe carries events only; never parse or suppress Pi's terminal UI.
+            with os.fdopen(read_fd) as stream, os.fdopen(reply_write, "w") as replies, (folder / f"stderr-{attempt}.log").open("w") as err:
+                try:
+                    child = subprocess.Popen(args, cwd=task["worktree"], stderr=err,
+                                             # Reuse Mate's no-supervisor mode; other extensions/skills still load.
+                                             env=dict(os.environ, MATE_MODE="dev", MATE_EVENT_FD=str(write_fd),
+                                                      MATE_REPLY_FD=str(reply_read), MATE_WORKER_CONTROL=json.dumps(task["worker_control"]),
+                                                      MATE_SESSION_FILE=str(session), MATE_ATTEMPT=str(attempt)),
+                                             pass_fds=(write_fd, reply_read))
+                    if task.get("launch_recoveries"):
+                        with db:
+                            event(db, task, "worker-started", "Pi process started in the saved endpoint/worktree; not verified completion.")
+                finally:
+                    os.close(write_fd)
+                    os.close(reply_read)
+                def stop(_sig, _frame):
+                    nonlocal uncertain
+                    uncertain = True
+                    if child.poll() is None:
+                        child.terminate()
+                    raise InterruptedError("Worker interrupted")
+                signal.signal(signal.SIGTERM, stop)
+                signal.signal(signal.SIGINT, stop)
+                for line in iter(lambda: stream.readline(4 * 1024 * 1024 + 1), ""):
+                    if len(line) > 4 * 1024 * 1024:
+                        raise ValueError("Pi JSON event exceeded 4 MiB; see worker log")
+                    item = json.loads(line)
+                    if item.get("type") == "mate_admit":
+                        try:
+                            reply = dict(ok=True, **rounds.admit(item))
+                        except (ValueError, RuntimeError, OSError) as exc:
+                            reply = dict(ok=False, error=str(exc))
+                        replies.write(json.dumps(reply) + "\n")
                         replies.flush()
-                elif item.get("type") == "agent_start":
-                    if rounds.guard is None:
-                        raise ValueError("Pi started without admission")
-                    rounds.settled = False
-            code = child.wait()
-            uncertain = code < 0  # A signal-killed Pi may have left tool subprocesses behind.
-            if code or not rounds.settled:
-                error = f"Pi exit={code}, settled={rounds.settled}, stopReason={rounds.last.get('stopReason')}: {rounds.last.get('errorMessage', '')}. See stderr-{attempt}.log"
+                        continue
+                    with (folder / f"events-{rounds.attempt}.jsonl").open("a") as log:
+                        log.write(line)
+                    if item.get("type") == "message_end" and item.get("message", {}).get("role") == "assistant":
+                        if rounds.guard is None:
+                            raise ValueError("Assistant output outside an admitted worker round")
+                        rounds.last = item["message"]
+                        record_usage(db, ident, rounds.attempt, rounds.last)
+                    if item.get("type") == "agent_settled":
+                        rounds.publish()
+                        if item.get("reply"):
+                            replies.write(json.dumps(dict(ok=True, attempt=rounds.attempt)) + "\n")
+                            replies.flush()
+                    elif item.get("type") == "agent_start":
+                        if rounds.guard is None:
+                            raise ValueError("Pi started without admission")
+                        rounds.settled = False
+                code = child.wait()
+                uncertain = code < 0  # A signal-killed Pi may have left tool subprocesses behind.
+                if code or not rounds.settled:
+                    error = f"Pi exit={code}, settled={rounds.settled}, stopReason={rounds.last.get('stopReason')}: {rounds.last.get('errorMessage', '')}. See stderr-{attempt}.log"
     except Exception as exc:
         error = str(exc)
     finally:
@@ -1867,7 +2117,7 @@ def worker(ident, attempt):
                 child.wait()
                 uncertain = True
         if uncertain:
-            error += " Pi was forcibly terminated; inspect pane/processes before any continuation."
+            error += f" {name} was forcibly terminated; inspect pane/processes before any continuation."
         unfinished = rounds.guard is not None
         if unfinished:
             rounds.publish(error, uncertain)
@@ -1876,7 +2126,7 @@ def worker(ident, attempt):
             current = load(db, ident)
             if current.get("worker_control") == task["worker_control"]:
                 if (error and not unfinished) or current.get("worker_pending"):
-                    current["error"] = error or "Pi exited before accepting its reserved continuation"
+                    current["error"] = error or f"{name} exited before accepting its reserved continuation"
                     if current["state"] != "complete":
                         current["state"] = "attention" if uncertain or current.get("worker_pending") else "failed"
                     event(db, current, "worker-exit", current["error"])
@@ -1897,6 +2147,8 @@ if __name__ == "__main__":
             serve()
         elif len(sys.argv) == 4 and sys.argv[1] == "worker":
             worker(task_id(sys.argv[2]), int(sys.argv[3]))
+        elif len(sys.argv) == 3 and sys.argv[1] == "hook":
+            sys.exit(claude_hook(sys.argv[2]))
         elif len(sys.argv) == 3 and sys.argv[1] == "recover-acquire":
             recover_acquire_cli(task_id(sys.argv[2]))
         elif sys.argv[1:] == ["status"]:

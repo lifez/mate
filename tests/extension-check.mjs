@@ -162,6 +162,12 @@ try {
   assert.throws(() => workerProfile(ctx, { model: 'unknown' }), /Unknown model/);
   assert.throws(() => workerProfile(ctx, { effort: 'max' }), /unsupported/);
   assert.throws(() => workerProfile(ctx, { model: 'other/vendor/model', effort: 'high' }), /unsupported/);
+  const claude = { harness: 'claude', provider: 'anthropic', model: 'claude-test', effort: 'high' };
+  assert.deepEqual(workerProfile(ctx, { harness: 'claude', model: 'anthropic/claude-test' }), claude, 'Claude models bypass the Pi registry');
+  assert.throws(() => workerProfile(ctx, { harness: 'claude' }), /explicit claude model/, 'never reuse the Pi supervisor model');
+  assert.throws(() => workerProfile(ctx, { harness: 'claude', model: 'claude-test', effort: 'off' }), /unsupported by Claude/);
+  assert.throws(() => workerProfile(ctx, { harness: 'codex', model: 'x' }), /Unknown harness/);
+  assert.deepEqual(workerProfile(ctx, { effort: 'max' }, claude), { ...claude, effort: 'max' }, 'continuation keeps the saved Claude harness');
   const configPath = join(tmp, 'mate.config.json');
   const configure = data => writeFileSync(configPath, JSON.stringify(data));
   configure({ worker: { model: 'openai-codex/worker-model', effort: 'xhigh', max_active: 5, workspace_per_task: true } });
@@ -184,13 +190,22 @@ try {
   assert.deepEqual(dispatchProfile(ctx, { model: 'openai-codex/worker-model', effort: 'xhigh' }, configPath),
     { provider: 'openai-codex', model: 'worker-model', effort: 'xhigh' });
   configure({ worker: { model: 'openai-codex/main-model', effort: 'high' }, dispatch: { rules: [
+    ...dispatch.rules, { when: 'UI work', use: { harness: 'claude', model: 'claude-test', effort: 'xhigh' } }] } });
+  assert.match(dispatchInstructions(configPath), /"harness":"claude"/);
+  assert.throws(() => dispatchProfile(ctx, { model: 'claude-test', effort: 'xhigh' }, configPath), /pass the selected harness/);
+  assert.deepEqual(dispatchProfile(ctx, { harness: 'claude', model: 'claude-test', effort: 'xhigh' }, configPath), { ...claude, effort: 'xhigh' });
+  configure({ worker: { harness: 'claude', model: 'claude-test', effort: 'high' } });
+  assert.deepEqual(dispatchProfile(ctx, {}, configPath), claude);
+  assert.deepEqual(dispatchProfile(ctx, { harness: 'pi' }, configPath), workerProfile(ctx, {}), 'a Pi override ignores Claude defaults');
+  configure({ worker: { model: 'openai-codex/main-model', effort: 'high' }, dispatch: { rules: [
     { when: 'x', use: { model: 'missing', effort: 'low' } }] } });
   assert.throws(() => dispatchProfile(ctx, { model: 'main-model', effort: 'high' }, configPath), /Unknown model/,
     'an invalid unused rule must fail closed before dispatch');
   for (const invalid of [null, [], { workers: {} }, { worker: null }, { worker: [] }, { projects: null }, { projects: [] },
     { worker: { model: 1 } }, { worker: { model: ' ' } }, { worker: { effort: 'ultra' } },
     { worker: { max_active: 0 } }, { worker: { max_active: 1.5 } },
-    { worker: { workspace_per_task: 'yes' } }, { worker: { typo: true } },
+    { worker: { workspace_per_task: 'yes' } }, { worker: { typo: true } }, { worker: { harness: 'codex' } },
+    { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [{ when: 'x', use: { harness: 'codex', model: 'm', effort: 'low' } }] } },
     { dispatch: {} }, { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [] } },
     { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [{ when: '', use: { model: 'worker-model', effort: 'low' } }] } },
     { worker: { model: 'main-model', effort: 'high' }, dispatch: { rules: [{ when: 'x', use: [{ model: 'worker-model', effort: 'low' }] }] } },

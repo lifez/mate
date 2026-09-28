@@ -92,8 +92,9 @@ each task gets its own confirmation; declining or an error stops the batch, whil
 earlier approvals remain saved. Declining creates no lease/pane/worker. Accepting
 wakes the supervisor so it can dispatch the approved task.
 
-The worker runs **native interactive pi TUI** in a dedicated Herdr pane and a
-Treehouse-leased worktree. By default Mate creates a new tab; optionally enable one
+The worker runs **native interactive pi TUI** (or Claude Code, when the task's
+`harness` is `claude`; see [CONFIGURATION.md](CONFIGURATION.md#worker-harness)) in a
+dedicated Herdr pane and a Treehouse-leased worktree. By default Mate creates a new tab; optionally enable one
 Herdr workspace per task or share an existing tab as described below. A task workspace
 keeps its normal tab bar for extra shells, servers or logs in the same worktree. You can
 see Pi's tool calls, output and response as they happen; use Pi's normal

@@ -67,7 +67,7 @@ example as above. Git history is unchanged; untracking does not erase older comm
   bar for extra shells, servers, or logs. Mate owns only its exact worker tab; extra
   tabs keep the workspace open and prevent lease return while they use the worktree.
   This is visual grouping, not a native Herdr Git-worktree relationship.
-- Initial dispatch precedence per model/effort field: **human override → matching dispatch rule → worker config → supervisor**.
+- Initial dispatch precedence per harness/model/effort field: **human override → matching dispatch rule → worker config → supervisor**.
 - Continuation keeps the task's saved profile unless explicitly overridden. Dispatch
   rules apply only to initial runs; config edits do not change existing task profiles.
 
@@ -101,8 +101,33 @@ not use a separate `crew-dispatch.json`:
 
 The supervisor compares the task with every `when` and chooses the best semantic
 match; array order is not priority. `why` is optional explanatory text. Each `use`
-must contain one concrete Pi `model` and supported `effort`. Profile arrays, harness
-switching and quota balancing are intentionally unsupported: Mate always launches Pi.
+must contain one concrete `model` and supported `effort`, plus an optional `harness`.
+Profile arrays and quota balancing are intentionally unsupported.
+
+## Worker harness
+
+`harness` (in `worker` or a rule's `use`) selects the worker program: `pi` (default)
+or `claude` (Claude Code). The supervisor harness does not decide it, so a Pi
+supervisor can dispatch a Claude worker. A task keeps its harness for life;
+continuation cannot switch it. Use a new task to try another harness.
+
+```json
+{ "when": "UI or frontend work.", "use": { "harness": "claude", "model": "claude-opus-5-5", "effort": "high" } }
+```
+
+A Claude `model` is any `claude --model` value; `effort` is one of `low`, `medium`,
+`high`, `xhigh`, `max`. Pi `worker` defaults never apply to a Claude dispatch. When
+rules use more than one harness, initial `mate_dispatch` must also pass `harness`.
+
+A Claude worker runs with `--dangerously-skip-permissions`: it never asks before a
+tool call, like a Pi worker with `--approve`. Before launch Mate marks only the leased
+worktree as trusted in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`) and
+copies the primary checkout's existing external-CLAUDE.md consent. Claude hooks
+(`mate.py hook`) give the same admission, tool gate, report and usage records as the
+Pi bridge. Claude reports tokens but no cost. To continue a resident Claude worker,
+Mate restarts it on the same saved session with `--resume`; an unstarted Claude
+continuation is never recovered automatically. Log in with `claude` itself; Mate
+stores no credentials.
 
 When rules are active, `worker.model` and `worker.effort` are the concrete default for
 an unmatched task, and initial `mate_dispatch` must pass both selected values. This

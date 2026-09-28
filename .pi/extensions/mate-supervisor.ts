@@ -13,27 +13,42 @@ import { openBearingsBoard, writeBearingsBoard } from "./lib/bearings.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels, StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 const efforts = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const harnesses = ["pi", "claude"] as const;
+const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
 const profileFields = {
-  model: Type.Optional(Type.String({ description: "Exact model ID (same provider), or provider/model-id. No fuzzy names." })),
+  harness: Type.Optional(StringEnum(harnesses, { description: "Worker harness. Default pi. A task keeps its harness for life." })),
+  model: Type.Optional(Type.String({ description: "Exact model ID (same provider), or provider/model-id. No fuzzy names. Claude: a claude CLI --model value." })),
   effort: Type.Optional(StringEnum(efforts)),
 };
+type Profile = { harness?: string; provider?: string; model?: string; effort?: string };
 
-export function workerProfile(ctx: ExtensionContext, overrides: { model?: string; effort?: ModelThinkingLevel },
-  defaults = { provider: ctx.model?.provider, model: ctx.model?.id, effort: ctx.thinkingLevel }) {
+export function workerProfile(ctx: ExtensionContext, overrides: Profile,
+  defaults: Profile = { provider: ctx.model?.provider, model: ctx.model?.id, effort: ctx.thinkingLevel }) {
+  const harness = overrides.harness ?? defaults.harness ?? "pi";
+  if (!harnesses.includes(harness as any)) throw new Error(`Unknown harness: ${harness}`);
+  if (harness === "claude") {
+    // Claude models are not in Pi's registry; the claude CLI validates the ID at launch.
+    const same = (defaults.harness ?? "pi") === "claude";
+    const model = (overrides.model ?? (same ? defaults.model : undefined))?.replace(/^anthropic\//, "");
+    if (!model || model.startsWith("-") || /\s/.test(model)) throw new Error("Claude workers need an explicit claude model ID");
+    const effort = overrides.effort ?? (same ? defaults.effort : undefined) ?? "high";
+    if (!claudeEfforts.includes(effort)) throw new Error(`Effort ${effort} is unsupported by Claude; choose ${claudeEfforts.join(", ")}`);
+    return { harness, provider: "anthropic", model, effort };
+  }
   const reference = overrides.model ?? defaults.model;
   if (!reference) throw new Error("Select a model with /model or specify provider/model-id");
-  let model = defaults.provider ? ctx.modelRegistry.find(defaults.provider, reference) : undefined;
+  let model = defaults.provider && (defaults.harness ?? "pi") === "pi" ? ctx.modelRegistry.find(defaults.provider, reference) : undefined;
   if (!model && reference.includes("/")) {
     const slash = reference.indexOf("/");
     model = ctx.modelRegistry.find(reference.slice(0, slash), reference.slice(slash + 1));
   }
   if (!model) throw new Error(`Unknown model: ${reference}. Use an exact ID from /model.`);
   const supported = getSupportedThinkingLevels(model);
-  if (overrides.effort !== undefined && !supported.includes(overrides.effort)) {
+  if (overrides.effort !== undefined && !supported.includes(overrides.effort as ModelThinkingLevel)) {
     throw new Error(`Effort ${overrides.effort} is unsupported by ${model.provider}/${model.id}; choose ${supported.join(", ")}`);
   }
   return { provider: model.provider, model: model.id,
-    effort: overrides.effort ?? clampThinkingLevel(model, defaults.effort ?? "off") };
+    effort: (overrides.effort ?? clampThinkingLevel(model, (defaults.effort ?? "off") as ModelThinkingLevel)) as ModelThinkingLevel };
 }
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -46,7 +61,8 @@ function readMateConfig(configPath = resolve(root, "mate.config.json")) {
     (config.worker !== undefined && !object(config.worker)) ||
     (config.projects !== undefined && !object(config.projects))) throw new Error(`Invalid Mate config: ${configPath}`);
   const worker = config.worker ?? {};
-  if (Object.keys(worker).some(key => !["model", "effort", "max_active", "workspace_per_task"].includes(key)) ||
+  if (Object.keys(worker).some(key => !["harness", "model", "effort", "max_active", "workspace_per_task"].includes(key)) ||
+    (worker.harness !== undefined && !harnesses.includes(worker.harness)) ||
     (worker.model !== undefined && (typeof worker.model !== "string" || !worker.model.trim() || worker.model !== worker.model.trim())) ||
     (worker.effort !== undefined && !efforts.includes(worker.effort)) ||
     (worker.max_active !== undefined && (!Number.isInteger(worker.max_active) || worker.max_active < 1)) ||
@@ -60,7 +76,8 @@ function readMateConfig(configPath = resolve(root, "mate.config.json")) {
         !object(rule) || Object.keys(rule).some(key => !["when", "use", "why"].includes(key)) ||
         typeof rule.when !== "string" || !rule.when.trim() || rule.when !== rule.when.trim() ||
         (rule.why !== undefined && (typeof rule.why !== "string" || !rule.why.trim() || rule.why !== rule.why.trim())) ||
-        !object(rule.use) || Object.keys(rule.use).some(key => !["model", "effort"].includes(key)) ||
+        !object(rule.use) || Object.keys(rule.use).some(key => !["harness", "model", "effort"].includes(key)) ||
+        (rule.use.harness !== undefined && !harnesses.includes(rule.use.harness)) ||
         typeof rule.use.model !== "string" || !rule.use.model.trim() || rule.use.model !== rule.use.model.trim() ||
         !efforts.includes(rule.use.effort))) throw new Error(`Invalid dispatch config: ${configPath}`);
   }
@@ -71,22 +88,28 @@ export function dispatchInstructions(configPath = resolve(root, "mate.config.jso
   const config = readMateConfig(configPath);
   if (!config.dispatch) return "";
   return "Mate dispatch profiles (trusted local configuration, not human approval):\n" +
-    JSON.stringify({ rules: config.dispatch.rules, default: { model: config.worker.model, effort: config.worker.effort } }) +
-    "\nChoose the best matching rule by meaning, not array order. Human-requested model/effort overrides the rules. If no rule matches, use default. Before approval, record the selected concrete model, effort, and rationale under Mate spec; at initial dispatch pass both fields explicitly. Do not apply these rules to continuation, which retains its saved profile.";
+    JSON.stringify({ rules: config.dispatch.rules, default: { ...(config.worker.harness ? { harness: config.worker.harness } : {}), model: config.worker.model, effort: config.worker.effort } }) +
+    "\nChoose the best matching rule by meaning, not array order. Human-requested harness/model/effort overrides the rules. If no rule matches, use default. A missing harness means pi. Before approval, record the selected harness, concrete model, effort, and rationale under Mate spec; at initial dispatch pass the model and effort explicitly, plus harness when it is not pi. Do not apply these rules to continuation, which retains its saved profile and harness.";
 }
 
 // Read on dispatch, not startup: edits affect new tasks without changing saved profiles.
-export function dispatchProfile(ctx: ExtensionContext, overrides: { model?: string; effort?: ModelThinkingLevel },
+export function dispatchProfile(ctx: ExtensionContext, overrides: Profile,
   configPath = resolve(root, "mate.config.json")) {
   const config = readMateConfig(configPath);
+  const worker = config.worker ?? {};
+  const harness = overrides.harness ?? worker.harness ?? "pi";
   if (config.dispatch) {
-    workerProfile(ctx, config.worker);
+    workerProfile(ctx, worker);
     for (const rule of config.dispatch.rules) workerProfile(ctx, rule.use);
     if (overrides.model === undefined || overrides.effort === undefined) {
       throw new Error("Dispatch rules are active; pass the selected concrete model and effort");
     }
+    if (overrides.harness === undefined && config.dispatch.rules.some((rule: any) => (rule.use.harness ?? "pi") !== (worker.harness ?? "pi"))) {
+      throw new Error("Dispatch rules use several harnesses; pass the selected harness");
+    }
   }
-  return workerProfile(ctx, { ...config.worker, ...overrides });
+  // Worker defaults belong to their own harness; never mix a Pi model into a Claude worker.
+  return workerProfile(ctx, { ...(harness === (worker.harness ?? "pi") ? worker : {}), ...overrides, harness });
 }
 
 const allowed = ["mate_propose", "mate_dispatch", "mate_status", "mate_ack", "mate_continue", "mate_extend", "mate_memory", "mate_remote"];
@@ -386,7 +409,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ id: Type.String(), brief: Type.String({ maxLength: 20000 }) }),
     async execute(_id, params) { return result(await rpc("propose_scope", params)); } });
   registerTool({ name: "mate_dispatch", label: "Dispatch approved task",
-    description: "Start a human-approved task using Treehouse and pi in Herdr. With active dispatch rules, pass the selected concrete model and effort; without rules, omitted values use mate.config.json worker defaults, then the supervisor's current settings. Human-requested overrides take precedence. Optional same_tab_as: a task ID or 'supervisor' opens a new pane in that exact tab, with a separate worktree/branch. Otherwise worker.workspace_per_task chooses a task workspace or the default new tab. Never moves existing workers. Shared tabs are not closed by Mate. Active-worker capacity comes from worker.max_active in mate.config.json. Retrying the same ID never acquires twice or changes its profile/placement.",
+    description: "Start a human-approved task using Treehouse and a pi or claude worker in Herdr. Optional harness (pi default, or claude) is fixed for the task's life. With active dispatch rules, pass the selected concrete model and effort (and harness when rules use more than one); without rules, omitted values use mate.config.json worker defaults, then the supervisor's current settings. Human-requested overrides take precedence. Optional same_tab_as: a task ID or 'supervisor' opens a new pane in that exact tab, with a separate worktree/branch. Otherwise worker.workspace_per_task chooses a task workspace or the default new tab. Never moves existing workers. Shared tabs are not closed by Mate. Active-worker capacity comes from worker.max_active in mate.config.json. Retrying the same ID never acquires twice or changes its profile/placement.",
     parameters: Type.Object({ id: Type.String(), same_tab_as: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,47}$", description: "Existing task ID, or supervisor for Mate's own tab. Omit to use the configured task workspace/default-tab placement." })), ...profileFields }),
     async execute(_id, params, _signal, _update, ctx) {
       return result(await rpc("dispatch", { id: params.id, ...(params.same_tab_as === undefined ? {} : { same_tab_as: params.same_tab_as }), ...dispatchProfile(ctx, params) }));

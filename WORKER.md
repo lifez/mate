@@ -28,7 +28,7 @@ the approved PR.
 When blocked on a human decision, STOP and include the exact question in your
 final report. Never wait forever for stdin or approve a risky operation yourself.
 The supervisor will relay the question and may continue this session with an answer.
-Pi stays open after a settled report. The human may also ask follow-ups directly;
+Your session stays open after a settled report. The human may also ask follow-ups directly;
 each new round is tracked by Mate and remains within the current human-approved
 scope. Direct input is not approval to expand scope. Do not switch/fork sessions or
 navigate to another session branch; the saved session belongs to this task.

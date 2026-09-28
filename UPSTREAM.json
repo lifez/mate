@@ -436,6 +436,15 @@
       "description": "Wire focused Calm renderers into Mate tools and add wake event details without changing model content, delivery or acknowledgement. Preserve previous initial snapshots.",
       "paths": [".pi/extensions/mate-supervisor.ts", ".pi/extensions/lib/calm.ts"],
       "local_commit": null
+    },
+    {
+      "component_ids": [],
+      "description": "Per-task worker harness: pi (default) or claude, chosen at dispatch and fixed for the task's life, independent of the supervisor harness. The Claude worker is Mate-owned: Claude hooks call mate.py over the private worker socket and reuse the Pi admission, tool gate, report, usage and generation/attempt-fenced control protocol; continuation restarts Claude on its saved session with --resume. Inherited Claude session markers are removed so the worker saves its transcript. No schema migration: tasks without harness stay Pi.",
+      "source_commit": "3c2a91d70e07b48c982a8fe3460ba367795bb5d3",
+      "reviewed_scope": "Claude launch settings and workspace-trust pre-registration only; reference-only, no full component audit or fetch.",
+      "sources": [{ "path": "bin/fm-claude-trust.sh", "blob": "6e1a49a9776249c50914e3ac28dea3d9a3f229b9", "mode": "reference-only" }, { "path": "bin/fm-spawn.sh", "blob": "ec71e91c2a1dbf788404a6370539053e39995a5b", "mode": "reference-only" }],
+      "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "CONFIGURATION.md", "SUPERVISOR.md", "WORKER.md", "README.md", "tests/test_mate.py", "tests/extension-check.mjs"],
+      "local_commit": null
     }
   ],
   "checks": [

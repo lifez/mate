@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 import unittest
 from unittest.mock import patch
 
@@ -1914,6 +1915,116 @@ print('fixture-private-output')
         self.assertEqual(m.load(self.db, 'fix')['state'], 'attention')
         with self.assertRaisesRegex(ValueError, 'uncertain launches'):
             m.resume(self.db, dict(id='fix', message='Must not restart possible orphan tools'))
+
+    def test_claude_worker_hooks_report_continue_and_shutdown(self):
+        self.config.write_text(json.dumps(dict(worker=dict(harness="claude", model="claude-test", effort="high"),
+            dispatch=dict(rules=[dict(when="UI work", use=dict(harness="claude", model="claude-test", effort="xhigh")),
+                                 dict(when="Mechanical", use=dict(model="pi-model", effort="off"))]))))
+        m.mate_config()
+        for bad in (dict(harness="claude", model="c", effort="off"), dict(harness="codex", model="c", effort="high")):
+            self.config.write_text(json.dumps(dict(worker=bad)))
+            with self.assertRaises(ValueError):
+                m.mate_config()
+        self.config.write_text('{}')
+        brief = "Inspect fixture; report evidence."
+        m.propose(self.db, dict(id='fix', repo=str(self.repo), base='main', brief=brief))
+        m.approve(self.db, dict(id="fix", sha=self.sha))
+        fakebin = self.root / "bin"
+        fakebin.mkdir()
+        claude = fakebin / "claude"
+        claude.write_text(r"""#!/usr/bin/env python3
+import json, os, shlex, signal, subprocess, sys, time
+from pathlib import Path
+home = Path(os.environ['MATE_HOME'])
+n = len(list(home.glob('claude-argv-*.json'))) + 1
+(home / f'claude-argv-{n}.json').write_text(json.dumps(dict(argv=sys.argv, claudecode=os.environ.get('CLAUDECODE'))))
+hooks = json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']
+sid = sys.argv[sys.argv.index('--session-id' if '--session-id' in sys.argv else '--resume') + 1]
+transcript = home / 'transcripts' / (sid + '.jsonl')
+transcript.parent.mkdir(exist_ok=True)
+codes = []
+def hook(name, **data):
+    command = hooks[name][0]['hooks'][0]['command']
+    out = subprocess.run(shlex.split(command), input=json.dumps(dict(data, session_id=sid, transcript_path=str(transcript))),
+                         capture_output=True, text=True)
+    codes.append([name, out.returncode, out.stdout, out.stderr])
+hook('PreToolUse', tool_name='Bash')
+hook('UserPromptSubmit', prompt=sys.argv[-1])
+with transcript.open('a') as t:
+    for mid, usage in (('m1', 5), ('m1', 7), ('m2', 3)):
+        t.write(json.dumps(dict(type='assistant', message=dict(id=mid, usage=dict(input_tokens=10, output_tokens=usage, cache_read_input_tokens=1, cache_creation_input_tokens=2)))) + '\n')
+hook('PreToolUse', tool_name='Bash')
+hook('Stop', last_assistant_message='Evidence: checked fixture.')
+(home / f'claude-hooks-{n}.json').write_text(json.dumps(codes))
+if os.environ.get('TEST_STAY'):
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    while True:
+        time.sleep(0.1)
+""")
+        claude.chmod(0o755)
+        treehouse = fakebin / "treehouse"
+        with patch.object(m, "run", self.fake_run), patch.object(m, "herdr", self.fake_herdr), \
+                patch.object(m.shutil, "which", return_value=str(claude)):
+            with self.assertRaisesRegex(ValueError, "provider anthropic"):
+                self.dispatch(harness="claude", provider="openai-codex", model="claude-test", effort="high")
+            task = self.dispatch(harness="claude", provider="anthropic", model="claude-test", effort="high")
+        self.assertEqual((task["harness"], task["claude_binary"]), ("claude", str(claude)))
+        with self.assertRaisesRegex(ValueError, "keeps its worker harness"):
+            m.worker_profile(dict(harness="pi"), task)
+        treehouse.write_text("#!/usr/bin/env python3\nimport json\nprint(" + repr(json.dumps(self.leases)) + ")\n")
+        treehouse.chmod(0o755)
+        herdr = fakebin / "herdr"  # Resident admission re-checks the exact pane identity.
+        herdr.write_text("#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(dict(result=dict(pane=dict(pane_id=sys.argv[-1], "
+                         f"workspace_id='w1', tab_id={task['tab']!r}, terminal_id='original-terminal')))))\n")
+        herdr.chmod(0o755)
+        config_dir = self.root / "claude-config"
+        config_dir.mkdir()
+        (config_dir / ".claude.json").write_text(json.dumps(dict(projects={str(self.repo): dict(hasClaudeMdExternalIncludesApproved=True)})))
+        env = dict(os.environ, PATH=str(fakebin) + os.pathsep + os.environ["PATH"], HERDR_PANE_ID=task["pane"],
+                   CLAUDE_CONFIG_DIR=str(config_dir), CLAUDECODE="1", TEST_STAY="1")
+        worker = subprocess.Popen([sys.executable, str(ROOT / "bin/mate.py"), "worker", "fix", "1"], env=env,
+                                  cwd=task["worktree"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            def wait_for(predicate):
+                deadline = time.monotonic() + 10
+                while not predicate(m.load(self.db, "fix")):
+                    self.assertIsNone(worker.poll(), worker.stdout.read() if worker.poll() is not None else "")
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.05)
+                return m.load(self.db, "fix")
+            task = wait_for(lambda t: t["state"] == "review" and t.get("worker_control"))
+            trust = json.loads((config_dir / ".claude.json").read_text())["projects"][task["worktree"]]
+            self.assertTrue(trust["hasTrustDialogAccepted"] and trust["hasClaudeMdExternalIncludesApproved"])
+            first = json.loads((self.home / "claude-argv-1.json").read_text())
+            argv = first["argv"]
+            self.assertIsNone(first["claudecode"], "supervisor session markers are not inherited")
+            self.assertIn("--dangerously-skip-permissions", argv)
+            self.assertEqual(argv[argv.index("--session-id") + 1], task["claude_session"])
+            self.assertEqual((argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]), ("claude-test", "high"))
+            self.assertEqual(argv[-1], brief)
+            codes = json.loads((self.home / "claude-hooks-1.json").read_text())
+            self.assertEqual([c[:2] for c in codes], [["PreToolUse", 2], ["UserPromptSubmit", 0], ["PreToolUse", 0], ["Stop", 0]])
+            self.assertIn(brief, json.loads(codes[1][2])["hookSpecificOutput"]["additionalContext"])
+            self.assertIn("Evidence", m.snapshot(self.db, {"id": "fix"})["report"]["text"])
+            usage = m.snapshot(self.db, {"id": "fix", "attempt": 1})["attempt_usage"]
+            self.assertEqual((usage["messages"], usage["input_tokens"], usage["output_tokens"], usage["estimated_cost_usd"]), (2, 20, 10, None))
+            request = uuid.uuid4().hex
+            task.update(attempt=2, state="launching", followup="Recheck", worker_pending=request)
+            with self.db:
+                m.save(self.db, task)
+            m.worker_control(task, "continue", request=request, message="Recheck", **m.worker_profile({}, task))
+            task = wait_for(lambda t: t["state"] == "review" and t["attempt"] == 2)
+            argv = json.loads((self.home / "claude-argv-2.json").read_text())["argv"]
+            self.assertEqual((argv[argv.index("--resume") + 1], argv[-1]), (task["claude_session"], "Recheck"))
+            m.worker_control(task, "shutdown")
+            self.assertEqual(worker.wait(timeout=15), 0)
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+            worker.stdout.close()
+        task = m.load(self.db, "fix")
+        self.assertEqual(task["state"], "review")
+        self.assertNotIn("worker_control", task)
 
     def test_event_transport_filters_and_reports_disconnect(self):
         sockpath = str(self.root / "events.sock")

@@ -135,6 +135,7 @@ text, copy credentials, or start an untracked worker to work around disconnectio
    settings/placement; otherwise explain the current outcome or concrete blocker.
    Include worker token usage and estimated USD from mate_status when reporting
    outcomes. Label it Pi's model-price estimate, never actual subscription billing.
+   Claude workers report tokens only, so their cost is untracked, not zero.
    If usage is null, untracked, or reported-message counts are below messages,
    say the total is incomplete/unknown rather than zero or free. It excludes your
    own supervisor usage and any usage not emitted in worker assistant messages.
@@ -144,10 +145,10 @@ text, copy credentials, or start an untracked worker to work around disconnectio
    only the unapproved scope while retaining its pinned SHA and branch; ask the human
    to run `/mate-approve ID` again. Never cancel merely to revise unapproved scope.
    After approval, `mate_propose` cannot revise it.
-7. Continue idle or stopped workers only within approved scope. Pi stays open after
+7. Continue idle or stopped workers only within approved scope. The worker stays open after
    each settled report; humans may ask follow-ups directly in its pane. Those rounds
    receive new attempts/reports/usage, so re-read current state before acting on an
-   older event. mate_continue sends to the exact idle Pi, or reopens a stopped saved
+   older event. mate_continue sends to the exact idle worker (a Claude worker restarts on its saved session), or reopens a stopped saved
    session; never send terminal keystrokes or retry a lost control reply blindly.
    For additional work on an idle/stopped review/failed task, use mate_extend with only the added scope, exclusions
    and acceptance checks; ask the human to run /mate-approve ID. Never treat a proposal
