@@ -405,6 +405,8 @@ def approve(db, p):
             p.get("brief", task["brief"]) != task["brief"]):
         raise ValueError("Approval no longer matches the pending task")
     task.update(state="approved", approved_at=time.time())
+    if "_parent_authority" in p:
+        task["parent_approval"] = p["_parent_authority"]
     with db:
         save(db, task)
         event(db, task, "base-approved", "Human approved scope and pinned base. Inspect current task; use mate_dispatch. No worker started.")
@@ -452,6 +454,8 @@ def review_scope(db, p):
             task.setdefault("scope_history", []).append(dict(pending, approved_at=time.time(),
                 approved_by=pwd.getpwuid(os.getuid()).pw_name, approved_via="mate-approve",
                 first_attempt=task["attempt"] + 1))
+            if "_parent_authority" in p:
+                task["scope_history"][-1]["parent_approval"] = p["_parent_authority"]
         del task["pending_scope"]
         with db:
             save(db, task)
@@ -1622,10 +1626,17 @@ def serve():
                    dispatch=dispatch, resume=resume, inspect_cancel=inspect_cancel, cancel=cancel,
                    status=snapshot, memory=memory, ack=acknowledge, complete=complete,
         inspect_return_lease=inspect_return_lease, return_lease=return_lease, close_tab=close_tab)
+    # Opt-in only. A latched secondmate home refuses startup without its binding.
+    remote = None
+    remote_path = HOME / "remote.json"
+    if (remote_path.exists() or remote_path.is_symlink() or
+            db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_authority'").fetchone()):
+        from mate_remote_runtime import open_runtime
+        remote = open_runtime(sys.modules[__name__], db, methods)
     selector = selectors.DefaultSelector()
     selector.register(sys.stdin, selectors.EVENT_READ, None)
     native = NativeEvents(db, selector)
-    print(json.dumps({"ready": True}), flush=True)
+    print(json.dumps({"ready": True, "role": "secondmate" if remote else "primary"}), flush=True)
     def terminate(_sig, _frame):
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, terminate)
@@ -1649,13 +1660,18 @@ def serve():
                         req = json.loads(line)
                         if not isinstance(req, dict):
                             raise ValueError("Expected a request object")
-                        result = methods[req["method"]](db, req.get("params", {}))
+                        result = (remote.local(req["method"], req.get("params", {})) if remote else
+                                  methods[req["method"]](db, req.get("params", {})))
                         print(json.dumps({"id": req["id"], "result": result}), flush=True)
                     except Exception as exc:
                         print(json.dumps({"id": req.get("id") if isinstance(req, dict) else None, "error": str(exc)}), flush=True)
             reconcile(db)
             native.sync()
+            if remote:
+                remote.poll()
     finally:
+        if remote:
+            remote.close()
         native.close()
         selector.close()
         owner.close()

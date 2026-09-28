@@ -4,6 +4,20 @@ Personal supervisor built on **pi + Herdr + Treehouse**. Mate is its own runtime
 not a Firstmate installation. Selected Firstmate code/patterns are tracked in
 [UPSTREAM.md](UPSTREAM.md) and [UPSTREAM.json](UPSTREAM.json).
 
+## Remote secondmates (in development)
+
+The remote inbox/outbox and SSH transport now connect to the control plane in an
+explicitly bound, fresh secondmate home. The primary now has a `mate_remote` tool
+and `/mate-remote` human dialogs for manually configured routes. Parent confirmations
+are revision-bound; local approval/completion/cleanup are refused in the secondmate
+role. Explicit home/route setup, human-confirmed secondmate start/recovery and durable
+event mirroring are implemented. The disposable local real Pi/Herdr/Treehouse lifecycle
+passes, including **real SSH to Omarchy** with a localhost fake model.
+Production home/route setup and real-provider authentication remain operator steps.
+Do not
+convert a live local home. See [remote dispatch progress and contracts](plans/remote-dispatch.md)
+and [route configuration](CONFIGURATION.md#remote-routes-experimental).
+
 ## Choose a mode
 
 To **develop Mate itself**, start a fresh coding session:
@@ -132,6 +146,7 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 
 - `/mate-approve ID [ID ...]` — human-only per-task scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may explicitly name a local target branch for safe fast-forward delivery; GitHub/remote PR merge and deploy are never included.
 - `/mate-status` — show open tasks and pending events without invoking a model.
+- `/mate-remote` — list configured remote routes. `/mate-remote ROUTE status [ID]` inspects a remote home; `approve ID`, `complete ID [--force]`, `close ID`, `return ID`, and `cancel ID` each use primary-human confirmation. `pending`, `result REQUEST_UUID`, and `reconnect` inspect/recover local transport only, never relaunch remote work. `doctor` checks prerequisites; `start` and `recover` launch only after human confirmation. Verified with disposable real-SSH lifecycle tests; production setup remains explicit.
 - `/mate-list` — show only the ID and state of each open task.
 - `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits `failed`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
@@ -158,7 +173,8 @@ the stable board path from current SQLite state. Only the latest 50 status rows 
 50 pending events are shown, with the retained total disclosed on the board.
 
 The supervisor gets only `mate_propose`, `mate_dispatch`, `mate_status`,
-`mate_continue`, `mate_extend`, `mate_ack`, `mate_memory`. The Mate extension selects this tool allowlist and
+`mate_continue`, `mate_extend`, `mate_ack`, `mate_memory`, `mate_remote`. The latter
+is primary-only and excludes approval/completion/cleanup operations. The Mate extension selects this tool allowlist and
 blocks other model tool calls. Normal pi global extensions/skills still load;
 Mate does not disable their own startup hooks or background behavior. Only load
 global extensions you trust to coexist with the supervisor.
@@ -858,6 +874,7 @@ Treehouse 2.1.1. The board has no remote script, stylesheet or font dependency.
 ```sh
 python3 -m unittest discover -s tests -v
 node tests/extension-check.mjs
+node tests/remote-ui-check.mjs  # real Python control plane + fake SSH, no models
 # Real Pi TUI in a PTY; localhost fake model, no subscription/API credentials.
 python3 tests/tui-smoke.py
 # Real supervisor TUI: native wake → bounded correction → human-input attachment → status/ack.

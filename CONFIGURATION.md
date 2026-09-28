@@ -200,6 +200,96 @@ destinations, including symlinks; it does not silently overwrite pooled env file
 Adapt your own trusted script for another destination or an explicit overwrite policy.
 Never commit the env source/destination, credentials or startup logs.
 
+## Remote routes (experimental)
+
+Remote routes are private per-primary files at `$MATE_HOME/remotes/NAME.json`, not
+project-controlled configuration. `NAME` matches `[a-z][a-z0-9-]{0,47}`. Each file
+must be account-owned, mode `0600`, and contain exactly:
+
+```json
+{
+  "host": "ssh-config-alias",
+  "home": "11111111-1111-4111-8111-111111111111",
+  "primary": "22222222-2222-4222-8222-222222222222",
+  "outbox": "/absolute/private/path/to/outbox.sqlite3"
+}
+```
+
+UUIDs above are examples, not credentials. They must match the explicitly
+provisioned remote binding and local outbox. The transport refuses absent outboxes
+or changed host/home/primary bindings; it does not provision or migrate them.
+Do not point two unrelated homes at the same journal. Receiver/key configuration
+must already be prepared; use the explicit setup workflow below.
+No credentials, source trees or startup files are copied by adding a route.
+
+`/mate-remote` lists configured names. `mate_remote` sends only model-permitted
+operations. Human commands are `/mate-remote NAME approve TASK`, `complete TASK
+[--force]`, `close TASK`, `return TASK`, and `cancel TASK`. Each shows the remote
+identity and exact task revision; close and return require separate confirmations.
+Declining initial approval sends no mutation. Declining an additional-scope dialog
+discards only that displayed pending addition, as the dialog explains.
+
+One local transport process is created lazily per route and closed on session
+shutdown; it does not launch or stop remote workers. `/mate-remote NAME pending`
+shows unresolved mutations; `result REQUEST_UUID` reads and durably stores the
+exact result without resending. Uncertain mutations block new mutations for that
+route, but status/inspection remain available. `reconnect` resets only the local
+transport. There is no automatic retry or uncertain-operation clearance.
+
+### Explicit setup
+
+Install this Mate checkout, Python, Pi, Herdr and Treehouse on the remote host first.
+Configure its `mate.config.json`, remote Git checkouts/pools and Pi authentication
+there; Mate never copies credentials or source trees. Verify SSH host keys yourself.
+Generate one primary UUID (`python3 -c 'import uuid; print(uuid.uuid4())'`).
+On the remote host, from its installed Mate checkout:
+
+```sh
+python3 bin/mate-remote-setup.py init-home /absolute/private/secondmate-home \
+  --primary PRIMARY_UUID --provider PROVIDER --model MODEL_ID --effort off \
+  --install-entrypoint
+```
+
+This creates a fresh home and an exclusive `~/.local/bin/mate-remote-v1` entrypoint;
+existing homes/entrypoints are never overwritten. Ensure that directory is in the
+remote noninteractive SSH PATH. For a restricted transport key, use `restrict` and
+the printed absolute receiver command in `authorized_keys` instead. The optional
+wrapper uses a trusted ordinary SSH account, not an OS sandbox. Neither method
+configures SSH credentials for you.
+
+Use the printed home UUID on the primary, with its intended `MATE_HOME` selected:
+
+```sh
+python3 bin/mate-remote-setup.py init-route omarchy --host omarchy \
+  --home REMOTE_HOME_UUID --primary PRIMARY_UUID
+```
+
+In the primary Pi session run `/mate-remote omarchy doctor`, then
+`/mate-remote omarchy start` and confirm the displayed home, installation and model.
+Doctor checks tools/configuration, not provider authentication. Linux can start its
+own named Herdr server; macOS requires that named server in a user GUI session.
+Start trusts the installed Pi project resources (`--approve`); review them first.
+Do not hot-edit the role binding or convert an existing local home.
+
+`recover` is a separately confirmed restart of a previously observed, now stopped
+secondmate in its exact original idle endpoint. It never replaces a terminal or
+replays an unobserved uncertain submission. A successful recovery records an audit
+link resolving the matching bootstrap request; unknown worker operations stay blocked.
+
+The primary polls remote notifications independently every five seconds, durably
+mirrors a hash-checked stream/cursor and wakes its model with pending IDs. Reports
+are read through remote status. `mate_remote` operations `events` and `ack_events`
+refer to primary mirror IDs; `ack` refers to the remote task event IDs. Mirror ack
+does not acknowledge remote task events. Unacknowledged mirror events replay after
+restart; unavailable transport never means stopped/completed. A read reconnect may
+restart only the local transport and never resubmits mutations.
+
+The disposable real Pi/Herdr/Treehouse lifecycle passes both locally and over real
+SSH to Omarchy, using a localhost fake model. This covers secondmate dispatch,
+reports/mirror/ack, resident continuation, exact cleanup and stopped-supervisor
+recovery. Real-provider authentication is not tested. No production remote home or
+route has been installed by these tests.
+
 ## When edits take effect
 
 - Required branch policy: new proposals, checked again before initial dispatch.

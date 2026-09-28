@@ -358,7 +358,7 @@ try {
   assert.ok(ackRow().length, 'persisted off restored');
   await commands.calm.handler('on', ctx);
   await wait(() => call('mate_status'));
-  assert.deepEqual(active.sort(), ['mate_ack', 'mate_continue', 'mate_dispatch', 'mate_extend', 'mate_memory', 'mate_propose', 'mate_status']);
+  assert.deepEqual(active.sort(), ['mate_ack', 'mate_continue', 'mate_dispatch', 'mate_extend', 'mate_memory', 'mate_propose', 'mate_remote', 'mate_status']);
   assert.equal(handlers.tool_call({ toolName: 'bash' }).block, true);
   assert.equal(handlers.tool_call({ toolName: 'read' }).block, true);
   assert.equal(handlers.tool_call({ toolName: 'external_tool' }).block, true);

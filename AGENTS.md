@@ -34,9 +34,13 @@ Run relevant checks from the repository root:
 ```sh
 python3 -m unittest discover -s tests -v
 node tests/extension-check.mjs
+node tests/remote-ui-check.mjs
 python3 tests/tui-smoke.py
 # Optional; requires Herdr, owns a disposable named server and Treehouse pool:
 python3 tests/live-smoke.py
+python3 tests/remote-live-smoke.py --local
+# Explicitly authorized host only; disposable real-SSH lifecycle, no credentials copied:
+python3 tests/remote-live-smoke.py --host SSH_ALIAS
 ```
 
 The TUI test uses a localhost fake model; it does not consume subscription quota.

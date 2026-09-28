@@ -11,6 +11,41 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Remote secondmate foundation, reference-only to local Firstmate
+  `65a3bac6031286b4058360859a9522a50a09bb14` (no fetch): read
+  `docs/remote-secondmates.md`, `bin/fm-on.sh`, and selected remote-spawn code in
+  `bin/fm-spawn.sh`. Adapted only the remote-owned home, durable request identity
+  and unknown-completion principles. New stdlib SQLite inbox in
+  `bin/mate_remote.py`; no Firstmate code copied or component baseline advanced.
+  Disposable tests cover replay, conflicts, identity, concurrent claims, crash
+  preservation and atomic outcomes. Follow-up adds Mate-owned bounded SSH
+  inbox transport/receiver with fixed home binding and no execution surface;
+  `fm-on.sh` remains reference-only for SSH safety/unknown-completion principles.
+  Real subprocess tests use a fake SSH boundary, not a live remote host.
+  Primary-owned outbox follow-up pins the route, journals before sending, refuses
+  resubmission of sending/uncertain requests and reconciles via fingerprint-checked
+  status reads. Disposable tests cover concurrency and a real process exit after
+  remote acceptance but before the local receipt. No Firstmate code copied.
+  Remote consumer follow-up connects an explicitly bound fresh secondmate home
+  to the existing control plane; local human mutations are refused and parent
+  inbox confirmations bind the full stored task revision. Status display/revision
+  share one SQLite snapshot; parent approval audit and all existing lifecycle gates
+  are retained. No new Firstmate source review/copy or baseline advancement.
+  Primary UI follow-up adds a model-restricted remote tool, human-only revision-
+  bound approval/acceptance/cleanup dialogs, independent per-home transport queues
+  and primary-side durable operation results. Unresolved mutations block new writes
+  without blocking inspections. Primary UI tests use the real Python runtime behind
+  fake SSH, including stale dialogs, session changes and independent-home behavior;
+  cleanup dialog payloads are tested separately from existing runtime safety tests.
+  Mate-owned explicit setup and human-confirmed bootstrap/recovery now journal before
+  launch and require exact endpoint/lock/heartbeat evidence. Automatic primary event
+  ingestion uses durable stream hashes, cursor commits and separate mirror acks.
+  Disposable local E2E passed real Pi/Herdr/Treehouse lifecycle and recovery with a
+  fake localhost model; the same real SSH E2E subsequently passed on Omarchy. Earlier
+  control-plane fixtures also ran from a disposable source copy on Omarchy; this is
+  not a production SSH/Pi lifecycle smoke test. No further upstream code was reused.
+  Full roadmap and explicitly unverified boundaries are in `plans/remote-dispatch.md`.
+
 - Persistent Pi workers, reference-only to local Firstmate `b430bf50` (no fetch),
   selected `fm-spawn.sh` Pi `agent_start`/`agent_settled` busy/idle bridge only.
   Mate now publishes each settled report/event without exiting Pi. Native human
