@@ -498,7 +498,7 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         }
       } catch (error) { ctx.ui.notify(`${current ? `${current}: ` : ""}${String(error)}`, "error"); }
     } });
-  pi.registerCommand("mate-complete", { description: "Human task acceptance: /mate-complete TASK_ID [--force] (also accepts idle/stopped failed tasks)",
+  pi.registerCommand("mate-complete", { description: "Human task acceptance: /mate-complete TASK_ID [--force] (also accepts stopped failed/attention tasks)",
     handler: async (args, ctx) => {
       try {
         if (ctx.mode !== "tui") throw new Error("Human TUI confirmation required");
@@ -510,7 +510,7 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         const { tasks } = await rpc("status", { id, history: true });
         let task = tasks[0];
         if (task.state !== "complete") {
-          if (task.state !== "review" && !(force && task.state === "failed")) throw new Error("Only review tasks, or idle/stopped failed tasks with --force, can be completed");
+          if (task.state !== "review" && !(force && ["failed", "attention"].includes(task.state))) throw new Error("Only review tasks, or stopped failed/attention tasks with --force, can be completed");
           if (task.pending_scope || task.scope_history?.at(-1)?.first_attempt > task.attempt) {
             throw new Error("Additional scope awaits approval/execution; review its result before completion");
           }
@@ -544,6 +544,10 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
           } else {
             ctx.ui.notify("Task complete; worker tab retained", "info");
           }
+        }
+        if (task.completion_resources_absent) {
+          ctx.ui.notify("Worktree and lease were already absent; no cleanup performed. Task history retained.", "info");
+          return;
         }
         if (task.lease_return_state === "returned") return;
         if (task.lease_return_state) throw new Error("Task remains complete, but previous Treehouse return is uncertain; inspect manually");

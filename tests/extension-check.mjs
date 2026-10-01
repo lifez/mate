@@ -222,7 +222,7 @@ try {
   // Check the copied example config with a mock catalog; no personal config is read.
   const luna = { provider: 'openai-codex', id: 'gpt-5.6-luna', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } };
   const lunaCtx = { ...ctx, modelRegistry: { find: (provider, id) =>
-    provider === luna.provider && id === luna.id ? luna : undefined } };
+    provider === luna.provider && !id.includes('/') ? { ...luna, id } : undefined } };
   assert.throws(() => dispatchProfile(lunaCtx, {}), /Dispatch rules are active/);
   assert.deepEqual(dispatchProfile(lunaCtx, { model: 'openai-codex/gpt-5.6-luna', effort: 'xhigh' }),
     { provider: 'openai-codex', model: 'gpt-5.6-luna', effort: 'xhigh' });
@@ -586,7 +586,7 @@ try {
   }
   execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt.update(state='failed',error='Pi exit=1, settled=False')\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   await commands['mate-complete'].handler('inspect', ctx);
-  assert.match(notices.at(-1)[0], /stopped failed tasks with --force/);
+  assert.match(notices.at(-1)[0], /stopped failed\/attention tasks with --force/);
   await commands['mate-complete'].handler('inspect --force', { ...ctx, mode: 'rpc' });
   assert.match(notices.at(-1)[0], /Human TUI confirmation/);
   const forceCtx = { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
@@ -602,6 +602,16 @@ try {
   await commands['mate-complete'].handler('inspect --force', forceCtx);
   assert.match(notices.at(-1)[0], /'pane'/, 'force reaches backend but refuses this fixture without an endpoint');
   assert.equal((await call('mate_status')).tasks[0].state, 'failed');
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['state']='attention'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
+  await commands['mate-complete'].handler('inspect', ctx);
+  assert.match(notices.at(-1)[0], /stopped failed\/attention tasks with --force/);
+  await commands['mate-complete'].handler('inspect --force', { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
+    assert.equal(title, 'Force accept task as complete?');
+    assert.match(body, /FORCE ACCEPTANCE from attention/);
+    return true;
+  } } });
+  assert.match(notices.at(-1)[0], /'pane'/, 'attention force reaches backend safety checks');
+  assert.equal((await call('mate_status')).tasks[0].state, 'attention');
   execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['state']='review'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
   approval = false;
   await commands['mate-complete'].handler('inspect', ctx);
@@ -673,6 +683,12 @@ try {
   assert.match(notices.at(-2)[0], /worker pane was already absent/);
   assert.match(returnBody, /\?\? unfinished\.txt/);
   assert.match(notices.at(-1)[0], /lease retained/);
+  execFileSync('python3', ['-c', `import sqlite3,os,json\nc=sqlite3.connect(os.path.join(os.environ['MATE_HOME'],'mate.sqlite3'))\nt=json.loads(c.execute("SELECT data FROM tasks WHERE id='inspect'").fetchone()[0])\nt['completion_resources_absent']={'checked_at':1}\nt['worktree']='/nonexistent/removed-worktree'\nc.execute("UPDATE tasks SET data=? WHERE id='inspect'",(json.dumps(t),))\nc.commit()`]);
+  await commands['mate-complete'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => {
+    throw new Error('Absent resources must not offer cleanup');
+  } } });
+  assert.match(notices.at(-1)[0], /already absent; no cleanup performed/);
+  assert.equal(notices.at(-1)[1], 'info', 'no Git status/lease return on the missing path');
   assert.equal(tools.mate_dispatch.parameters.properties.same_tab_as.type, 'string');
   assert.match(tools.mate_dispatch.description, /same_tab_as/);
   for (const id of ['batch-a', 'batch-b', 'batch-c']) await call('mate_propose', { id, repo, base: 'main', brief });

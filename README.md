@@ -189,7 +189,7 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 - `/mate-status` — show open tasks and pending events without invoking a model.
 - `/mate-remote` — list configured remote routes. `/mate-remote ROUTE status [ID]` inspects a remote home; `approve ID`, `complete ID [--force]`, `close ID`, `return ID`, and `cancel ID` each use primary-human confirmation. `pending`, `result REQUEST_UUID`, and `reconnect` inspect/recover local transport only, never relaunch remote work. `doctor` checks prerequisites; `start` and `recover` launch only after human confirmation. Verified with disposable real-SSH lifecycle tests; production setup remains explicit.
 - `/mate-list` — show only the ID and state of each open task.
-- `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits `failed`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
+- `/mate-complete ID [--force]` — accept an idle/stopped `review` task (`--force` also permits stopped `failed`/`attention`), gracefully exit its idle Pi, then separately confirm tab closure and exact Treehouse lease return.
 - `/mate-cancel ID` — human-only cancellation of an eligible unstarted task after read-only safety checks.
 - `/mate-wake` — replay unacknowledged events if the supervisor missed one.
 - `/mate-reconnect` — restart the owned control plane/watcher; task state is retained.
@@ -338,9 +338,13 @@ shutdown retry occurs.
 
 To accept existing work despite a failed worker run, use `/mate-complete ID --force`.
 The human dialog warns that the result may be incomplete and shows the saved error.
-This only adds `failed` to the allowed states, not `attention` or active tasks. Under
-the round lock, Mate checks the original endpoint/terminal and exact Treehouse lease,
-plus resident ownership or stopped shell/process readiness as appropriate. If the
+This adds `failed` and stopped `attention` to the allowed states, never active tasks.
+Under the round lock, Mate checks the original endpoint/terminal and exact Treehouse
+lease, plus resident ownership or stopped shell/process readiness as appropriate.
+For `attention`, the resident lock must also be free, the lease inventory must contain
+only the exact idle shell (or no processes for a missing pane), and no task/worktree
+process may remain in the OS snapshot. Missing worker control metadata is archived
+as `stopped_worker_control` only after these checks pass; no shutdown command is sent. If the
 human already closed the original pane, Mate accepts only Herdr's structured
 `pane_not_found` proof plus the exact lease reporting an empty process inventory;
 it records the missing pane and skips the later tab-close prompt. An unreadable pane,
@@ -348,8 +352,16 @@ remaining process, busy or changed resource still refuses; no active round is
 interrupted. Pending/unexecuted scope additions still block.
 The error, reports, usage and events remain; `completed_via: "mate-complete --force"`
 and `completed_from` record the override alongside the usual time/local account.
-Tab closure still requires its own separate confirmation. Reload the supervisor
-with workers stopped (`/reload`) before using the new flag; no state migration is needed.
+For stopped `attention` tasks whose resources were removed externally, `--force`
+also accepts a structurally confirmed missing pane, absent worktree path and
+Treehouse inventory with no saved path, lease ID or holder. Both worker locks must
+be free, and the process snapshot must have no task/setup/session/worktree matches.
+Unavailable or malformed evidence, an existing worktree (including a dangling
+symlink), or a reassigned lease still refuses. Acceptance records
+`completion_resources_absent`, preserves the original receipt/history, and skips
+cleanup; it does not claim to have returned a lease or delete Git metadata/branches.
+Tab closure otherwise still requires its own separate confirmation. Reload the supervisor
+with workers stopped (`/reload`) before using the new path; no state migration is needed.
 
 `complete` records your acceptance—not automatic proof of correctness. Status
 includes `completed_at` (Unix time), `completed_by` (the local OS account running
@@ -665,9 +677,10 @@ attempt rather than counting the saved session history again.
 - A hard crash during lease/pane creation is **attention**, not an invitation to
   retry. The journal and any lease receipt are retained. No automatic re-acquire,
   process killing, or destructive rollback attempts to guess what happened.
-  Any `attention` task blocks new dispatch/continuation until inspected and repaired;
-  only the exact unstarted continuation being inspected by `mate_continue` is exempt
-  after passing recovery checks. Other attention tasks and the two-worker cap still block.
+  Each `attention` task reserves one slot in `worker.max_active` (default 2), since
+  its worker may still be live; it does not block unrelated dispatch/continuation
+  while capacity remains. The exact unstarted continuation inspected by
+  `mate_continue` reuses its reserved slot only after passing recovery checks.
 - A hard-killed worker wrapper might leave its child running. Missing worker locks
   therefore become **attention**, not a resumable failure. Inspect the recorded
   pane, lease and processes manually; the runtime has no general force-repair or
@@ -740,8 +753,9 @@ Under the worker lock it checks the original endpoint/terminal, exact lease/hold
 isolated worktree/common directory, branch and unchanged approved HEAD; startup
 must have succeeded if configured. No session, usage, reports, worker events,
 unknown artifacts or possible task/worktree processes may remain. Only the idle
-shell may appear in Treehouse's process inventory. Pending scope, other attention
-tasks and worker capacity still block. Dirty startup files are preserved.
+shell may appear in Treehouse's process inventory. Pending scope and exhausted
+worker capacity still block; other attention tasks reserve one slot each.
+Dirty startup files are preserved.
 
 Success retains the entire prior record in `launch_recoveries`, emits
 `launch-recovered` on the old attempt and starts one new attempt with the approved
@@ -781,6 +795,14 @@ missing receipt, changed cwd/resource, extra process or unstable terminal still
 refuses without changing task state. This is not available to a generic `attention`
 crash and never reacquires, resets, cleans up or retries a submitted command.
 
+`/mate-complete ID --force` uses the same terminal-rebind inspection for stopped
+`review`/`failed`/`attention` tasks, without launching another attempt. It records
+old/new terminal IDs with human acceptance; the original receipt, reports, edits
+and lease remain intact. For `attention`, both worker and resident locks must be
+free; stale control metadata is archived, never used to send shutdown. A changed
+pane/workspace/tab is still refused: only the terminal incarnation may change.
+Tab closure and lease return still require separate confirmations.
+
 For an existing `attention: No worker lock after 60s` **continuation**, return the
 original pane to its shell yourself, then tell the supervisor it is fixed and ask
 to continue the same task. No supervisor shutdown, manual database edit or new base
@@ -796,7 +818,8 @@ lock before journaling the next attempt:
 - Shell-only foreground, no shell children or other shell-group processes, Treehouse's worktree process
   inventory contains only that shell, and no OS command references the task/session.
   Missing/malformed/unavailable inspection data is a refusal, not evidence of absence.
-- No pending scope addition, other attention task or exhausted worker capacity.
+- No pending scope addition or exhausted worker capacity. Other attention tasks
+  each reserve one slot; the inspected task reuses its own slot.
 
 Success retains the failed launch in `launch_recoveries` and emits a durable
 `launch-recovered` event on the old attempt, then starts a **new attempt** using the
@@ -866,7 +889,7 @@ data/supervisor.lock               kernel-held ownership lock
 data/calm                          persistent Calm presentation preference
 data/.lavish/bearings-board.html   private read-only fleet board (rebuilt in place)
 data/<id>/session.jsonl            worker pi session (reused on continuation)
-data/<id>/events-<attempt>.jsonl    selected Pi lifecycle/message/tool events
+data/<id>/events-<attempt>.jsonl    Pi lifecycle/tool events, finalized messages and streaming heartbeats
 data/<id>/stderr-<launch-attempt>.log  provider/CLI errors across that Pi process's rounds
 data/<id>/report-<attempt>.txt      retained worker outcome
 data/<id>/run.lock                 active round / task mutation exclusion
@@ -897,7 +920,10 @@ not repeated scope, events or usage. Use the returned offset unchanged (it is a 
 stream seek cookie, not a character index), and continue until `report.more` is
 false. A new attempt does not redirect old-report pagination; reread current status
 at offset 0 before acting on possibly changed scope/state. A missing report is not
-proof of completion. Full logs remain on disk for manual inspection.
+proof of completion. Event logs retain full finalized messages (`message_end`);
+streaming `message_update` entries contain only their type, keeping the log mtime
+fresh for stall detection without repeating accumulated text. Pi session history
+is unchanged. Event logs remain on disk for manual inspection.
 
 No task data is deleted or migrated. Install/reload these runtime changes only after
 workers stop; existing sessions still contain older verbose tool results.

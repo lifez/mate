@@ -586,7 +586,7 @@ print('fixture-private-output')
                 with self.assertRaises(ValueError):
                     m.resume(self.db, dict(id=ident, message='Retry'))
             self.assertTrue(m.snapshot(self.db, {})['events'])
-            # Remove only the fixture task so the next subcase can acquire (attention blocks fleet).
+            # Remove only the fixture task so the next subcase has a fresh capacity slot.
             with self.db: self.db.execute('DELETE FROM tasks WHERE id=?', (ident,))
 
     def test_invalid_dispatch_config_stops_before_acquire(self):
@@ -1140,8 +1140,7 @@ print('fixture-private-output')
             with self.assertRaisesRegex(RuntimeError, 'Fixture acquisition'):
                 self.dispatch(same_tab_as='supervisor')
         failed = m.load(self.db, 'fix')
-        with self.assertRaisesRegex(ValueError, 'uncertain task'):
-            m.check_capacity(self.db)
+        m.check_capacity(self.db)  # One uncertain worker reserves only one of two slots.
         for receipt in ({'pane': {'terminal_id': 'split-terminal'}},
                         {'root_pane': {'terminal_id': 'original-terminal'}}):
             with self.subTest(receipt=receipt):
@@ -1300,7 +1299,7 @@ print('fixture-private-output')
             for change in (dict(force='true'), dict(force=1), dict(force=False), dict(attempt=2)):
                 with self.assertRaises(ValueError):
                     m.complete(self.db, params | change)
-            for change in (dict(state='attention'), dict(state='running'), dict(state='launching'),
+            for change in (dict(state='running'), dict(state='launching'),
                            dict(state='approved'), dict(state='acquiring'), dict(state='awaiting-base'),
                            dict(pending_scope={'brief': 'not approved'}),
                            dict(scope_history=[dict(first_attempt=2)])):
@@ -1340,6 +1339,142 @@ print('fixture-private-output')
         self.assertEqual(snapshot['tasks'][0]['error'], task['error'])
         self.assertEqual(len(snapshot['events']), 2, 'completion preserves approval and failure events')
         self.assertEqual(snapshot['open_tasks'], 0)
+
+    def test_force_complete_attention_requires_stopped_owned_resources(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr), \
+             patch.object(m, 'herdr_pane_presence', return_value='present'):
+            task = self.dispatch()
+            task.update(state='attention', error='Resident worker disappeared',
+                        worker_control=dict(socket='/missing/pi.sock', generation='old'))
+            with self.db:
+                m.save(self.db, task)
+                m.event(self.db, task, 'worker-missing', task['error'])
+            report = self.home / 'fix/report-1.txt'
+            report.write_text('Reviewed report')
+            params = dict(id='fix', attempt=1, force=True)
+            with self.assertRaises(ValueError):
+                m.complete(self.db, params | dict(force=False))
+            for name in ('run.lock', 'resident.lock'):
+                with m.lock(self.home / 'fix' / name):
+                    with self.assertRaisesRegex(ValueError, 'still active'):
+                        m.complete(self.db, params)
+            for gate in ('ready_pane', 'check_lease'):
+                with patch.object(m, gate, side_effect=ValueError('Uncertain resources')):
+                    with self.assertRaisesRegex(ValueError, 'Uncertain'):
+                        m.complete(self.db, params)
+            with patch.object(m, 'check_lease', return_value={'processes': []}):
+                with self.assertRaisesRegex(ValueError, 'process inventory'):
+                    m.complete(self.db, params)
+            with patch.object(m, 'ready_pane', return_value=(100, {
+                    120: {'args': f'pi --session {self.home}/fix/session.jsonl'}})):
+                with self.assertRaisesRegex(ValueError, 'orphan'):
+                    m.complete(self.db, params)
+            with patch.object(m, 'herdr_pane_presence', return_value='unknown'):
+                with self.assertRaisesRegex(ValueError, 'Cannot confirm'):
+                    m.complete(self.db, params)
+            with patch.object(m, 'herdr_pane_presence', return_value='gone'):
+                with self.assertRaisesRegex(ValueError, 'still reports'):
+                    m.complete(self.db, params)
+            self.assertEqual(m.load(self.db, 'fix'), task)
+            with patch.object(m, 'worker_control', side_effect=AssertionError('No shutdown of missing worker')):
+                completed = m.complete(self.db, params)
+            self.assertEqual(completed['state'], 'complete')
+            self.assertEqual(completed['completed_from'], 'attention')
+            self.assertEqual(completed['error'], task['error'])
+            self.assertNotIn('worker_control', completed)
+            self.assertEqual(completed['stopped_worker_control'], task['worker_control'])
+            self.assertEqual(report.read_text(), 'Reviewed report')
+            self.assertEqual(m.complete(self.db, params), completed)
+            self.assertEqual(len(m.snapshot(self.db, {})['events']), 2)
+            # Interrupted workers may already have cleared their control metadata.
+            stopped = {k: v for k, v in task.items() if k != 'worker_control'}
+            with self.db:
+                m.save(self.db, stopped)
+            self.assertEqual(m.complete(self.db, params)['completed_from'], 'attention')
+            for change in (dict(pending_scope={'brief': 'not approved'}),
+                           dict(scope_history=[dict(first_attempt=2)])):
+                with self.db:
+                    m.save(self.db, task | change)
+                with self.assertRaisesRegex(ValueError, 'Scope'):
+                    m.complete(self.db, params)
+            # Missing original pane is eligible only with no worktree/orphan processes.
+            with self.db:
+                m.save(self.db, task)
+            with patch.object(m, 'herdr_pane_presence', return_value='gone'), \
+                 patch.object(m, 'check_lease', return_value={'processes': []}):
+                with patch.object(m, 'run', return_value=f'pi --session {self.home}/fix/session.jsonl'):
+                    with self.assertRaisesRegex(ValueError, 'orphan'):
+                        m.complete(self.db, params)
+                with patch.object(m, 'run', return_value=''):
+                    completed = m.complete(self.db, params)
+                    self.assertTrue(completed['pane_gone_at_completion'])
+                    self.assertNotIn('worker_control', completed)
+
+    def test_force_complete_attention_with_externally_removed_resources(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+            task.update(state='attention', error='Resident disappeared',
+                        worker_control=dict(socket='/missing.sock', generation='old'))
+            with self.db:
+                m.save(self.db, task)
+            params = dict(id='fix', attempt=1, force=True)
+            wt = Path(task['worktree'])
+            m.shutil.rmtree(wt)  # Disposable fixture only; leave Git's stale worktree metadata.
+            self.leases = []
+            with patch.object(m, 'herdr_pane_presence', return_value='gone'):
+                for name in ('run.lock', 'resident.lock'):
+                    with m.lock(self.home / 'fix' / name):
+                        with self.assertRaisesRegex(ValueError, 'still active'):
+                            m.complete(self.db, params)
+                for rows in ({}, [None], [{}], [dict(path=task['worktree'], status='available')],
+                             [dict(path=str(self.root / 'other'), status='leased',
+                                   lease_id=task['lease']['lease_id'], lease_holder='other')],
+                             [dict(path=str(self.root / 'other'), status='leased',
+                                   lease_id='other', lease_holder=task['holder'])]):
+                    self.leases = rows
+                    with self.subTest(rows=rows), self.assertRaises(ValueError):
+                        m.complete(self.db, params)
+                self.leases = []
+                def uncertain(args, cwd=None, timeout=30):
+                    if args[0] == 'ps':
+                        return f'120 1 120 ?? pi pi --session {self.home}/fix/session.jsonl'
+                    return self.fake_run(args, cwd, timeout)
+                with patch.object(m, 'run', uncertain):
+                    with self.assertRaisesRegex(ValueError, 'process remains'):
+                        m.complete(self.db, params)
+                with patch.object(m, 'run', side_effect=RuntimeError('inspection unavailable')):
+                    with self.assertRaises(ValueError):
+                        m.complete(self.db, params)
+                with patch.object(m.os, 'lstat', side_effect=PermissionError('unreadable')):
+                    with self.assertRaises(PermissionError):
+                        m.complete(self.db, params)
+                wt.symlink_to(self.root / 'nonexistent')
+                with self.assertRaises(ValueError):
+                    m.complete(self.db, params)
+                wt.unlink()
+                self.assertEqual(m.load(self.db, 'fix'), task)
+                with patch.object(m, 'worker_control', side_effect=AssertionError('No shutdown')):
+                    done = m.complete(self.db, params)
+                self.assertEqual(done['state'], 'complete')
+                self.assertEqual(done['completion_resources_absent']['lease_id'], task['lease']['lease_id'])
+                self.assertTrue(done['pane_gone_at_completion'])
+                self.assertNotIn('lease_return_state', done)
+                self.assertNotIn('worker_control', done)
+                self.assertEqual(done['stopped_worker_control'], task['worker_control'])
+                for key in ('lease', 'error', 'branch', 'attempt'):
+                    self.assertEqual(done[key], task[key])
+                self.assertEqual(m.complete(self.db, params), done)
+                self.assertEqual(self.returns, [])
+                self.assertEqual(m.snapshot(self.db, {})['open_tasks'], 0)
+            with self.db:
+                m.save(self.db, task)
+            with patch.object(m, 'herdr_pane_presence', return_value='unknown'):
+                with self.assertRaisesRegex(ValueError, 'Cannot confirm'):
+                    m.complete(self.db, params)
 
     def test_force_complete_accepts_exact_missing_pane_only_without_worktree_processes(self):
         self.propose()
@@ -1454,6 +1589,63 @@ print('fixture-private-output')
             old_terminal_id='original-terminal', new_terminal_id='restored-terminal',
             pane=task['pane'], at=continued['terminal_rebindings'][0]['at'], via='mate_continue')])
         self.assertEqual((self.acquires, self.launches), (1, 2))
+
+    def test_force_complete_rebinds_restored_terminal_without_launch_or_cleanup(self):
+        self.propose()
+        m.approve(self.db, dict(id='fix', sha=self.sha))
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            task = self.dispatch()
+        dirty = Path(task['worktree']) / 'keep.txt'
+        dirty.write_text('Keep uncommitted work')
+        foreign_cwd = False
+
+        def restored(t, *args):
+            result = self.fake_herdr(t, *args)
+            if args[:2] == ('pane', 'get'):
+                cwd = str(self.repo) if foreign_cwd else t['worktree']
+                result['pane'].update(terminal_id='restored-terminal', cwd=cwd, foreground_cwd=cwd)
+            return result
+
+        params = dict(id='fix', attempt=1, force=True)
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', restored), \
+                patch.object(m, 'herdr_pane_presence', return_value='present'):
+            for state in ('review', 'failed', 'attention'):
+                with self.subTest(state=state):
+                    original = dict(task, state=state)
+                    if state == 'attention':
+                        original['worker_control'] = dict(socket='stale', generation='old')
+                    with self.db:
+                        m.save(self.db, original)
+                    before = m.load(self.db, 'fix')
+                    foreign_cwd = True
+                    with self.assertRaisesRegex(ValueError, 'saved worktree'):
+                        m.complete(self.db, params)
+                    self.assertEqual(m.load(self.db, 'fix'), before)
+                    foreign_cwd = False
+                    self.leases[0]['processes'].append(dict(pid=101))
+                    with self.assertRaisesRegex(ValueError, 'other worktree processes'):
+                        m.complete(self.db, params)
+                    self.assertEqual(m.load(self.db, 'fix'), before)
+                    self.leases[0]['processes'].pop()
+                    def orphan(args, cwd=None, timeout=30):
+                        result = self.fake_run(args, cwd, timeout)
+                        return (result + '\n120 1 120 ?? pi pi --session ' + str(self.home / 'fix/session.jsonl')) if args[:2] == ['ps', '-axo'] else result
+                    with patch.object(m, 'run', orphan):
+                        with self.assertRaisesRegex(ValueError, 'task/session process'):
+                            m.complete(self.db, params)
+                    self.assertEqual(m.load(self.db, 'fix'), before)
+                    with patch.object(m, 'worker_control', side_effect=AssertionError('No stale shutdown')):
+                        completed = m.complete(self.db, params)
+                    self.assertEqual((completed['state'], completed['attempt']), ('complete', 1))
+                    self.assertEqual(completed['terminal_id'], 'restored-terminal')
+                    self.assertEqual(completed['endpoint_receipt'], task['endpoint_receipt'])
+                    audit = completed['terminal_rebindings'][0]
+                    self.assertEqual((audit['old_terminal_id'], audit['new_terminal_id'], audit['via']),
+                                     ('original-terminal', 'restored-terminal', 'mate-complete --force'))
+                    self.assertNotIn('worker_control', completed)
+                    self.assertEqual(m.complete(self.db, params), completed)
+                    self.assertEqual(dirty.read_text(), 'Keep uncommitted work')
+        self.assertEqual((self.acquires, self.launches, self.returns), (1, 1, []))
 
     def test_new_pane_readiness_still_refuses_after_deadline(self):
         error = ValueError('Worker pane has background/stopped processes; inspect before continuing')
@@ -1671,12 +1863,11 @@ print('fixture-private-output')
             self.leases[0]['lease_holder'] = 'foreign'; refused()
             self.leases[0]['lease_holder'] = task['holder']
             other = self.propose('other')
+            third = self.propose('third'); third['state'] = 'running'
+            with self.db: m.save(self.db, third)
             for state in ('attention', 'running'):
                 other['state'] = state
                 with self.db: m.save(self.db, other)
-                if state == 'running':
-                    third = self.propose('third'); third['state'] = 'running'
-                    with self.db: m.save(self.db, third)
                 refused()
 
     def test_crashed_worker_requires_inspection_not_duplicate_resume(self):
@@ -1690,8 +1881,7 @@ print('fixture-private-output')
         self.assertEqual(m.load(self.db, "fix")["state"], "attention")
         with self.assertRaises(ValueError):
             m.resume(self.db, dict(id="fix", message="retry"))
-        with self.assertRaisesRegex(ValueError, "uncertain task"):
-            m.check_capacity(self.db)
+        m.check_capacity(self.db)  # New work is allowed; uncertain-task retry is still refused.
 
     def test_stalled_live_worker_alerts_once_without_stopping(self):
         task = self.propose()
@@ -1732,6 +1922,28 @@ print('fixture-private-output')
         with self.assertRaisesRegex(ValueError, "3 workers"):
             m.check_capacity(self.db)
 
+    def test_attention_reserves_slots_without_blocking_dispatch(self):
+        self.config.write_text(json.dumps({'worker': {'max_active': 20}}))
+        for index in range(11):
+            task = self.propose(f'uncertain-{index}')
+            task['state'] = 'attention'
+            with self.db: m.save(self.db, task)
+        with patch.object(m, 'run', self.fake_run), patch.object(m, 'herdr', self.fake_herdr):
+            for index in range(9):
+                ident = f'new-{index}'
+                self.propose(ident)
+                m.approve(self.db, dict(id=ident, sha=self.sha))
+                self.assertEqual(self.dispatch(id=ident)['state'], 'launching')
+            self.propose()
+            m.approve(self.db, dict(id='fix', sha=self.sha))
+            with self.assertRaisesRegex(ValueError, '20 workers'):
+                self.dispatch()
+        self.assertEqual(self.launches, 9)
+        # Recovery replaces its own reserved slot only after the caller's inspection.
+        m.check_capacity(self.db, inspected='uncertain-0')
+        with self.assertRaises(ValueError):
+            m.check_capacity(self.db, inspected='fix')
+
     def test_supervisor_lock_and_restart_snapshot(self):
         self.propose()
         owner = m.lock(self.home / "supervisor.lock")
@@ -1769,7 +1981,8 @@ print('fixture-private-output')
                     self.assertEqual([e['kind'] for e in first['events']].count('report'), 1)
                     other = self.propose('other'); other['state'] = 'attention'
                     with self.db: m.save(self.db, other)
-                    with self.assertRaisesRegex(ValueError, 'uncertain task'): rounds.admit({})
+                    self.config.write_text('{"worker":{"max_active":1}}')
+                    with self.assertRaisesRegex(ValueError, 'already active or uncertain'): rounds.admit({})
                     other['state'] = 'running'
                     with self.db: m.save(self.db, other)
                     self.config.write_text('{"worker":{"max_active":1}}')
@@ -1848,7 +2061,7 @@ print('fixture-private-output')
         fakebin.mkdir()
         for name, content in {
             "treehouse": "#!/usr/bin/env python3\nimport json\nprint(" + repr(json.dumps(self.leases)) + ")\n",
-            "pi": "#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ['MATE_HOME'], 'argv.json').write_text(json.dumps(sys.argv))\nerror=os.environ.get('TEST_PROVIDER_ERROR')\nprint('Native Pi terminal output')\nf=os.fdopen(int(os.environ['MATE_EVENT_FD']), 'w')\nprint(json.dumps({'type':'message_end','message':{'role':'assistant','stopReason':'error' if error else 'stop','errorMessage':'quota' if error else '', 'usage':{'input':100,'output':20,'cacheRead':30,'cacheWrite':10,'cost':{'total':0.125}}, 'content':[{'type':'text','text':'Evidence: checked fixture.'}]}}), file=f)\nif not os.environ.get('TEST_NO_SETTLED'): print(json.dumps({'type':'agent_settled'}), file=f)\nf.close()\nif os.environ.get('TEST_KILL_PI'): os.kill(os.getpid(), 9)\n"
+            "pi": "#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ['MATE_HOME'], 'argv.json').write_text(json.dumps(sys.argv))\nerror=os.environ.get('TEST_PROVIDER_ERROR')\nprint('Native Pi terminal output')\nf=os.fdopen(int(os.environ['MATE_EVENT_FD']), 'w')\nfor _ in range(100): print(json.dumps({'type':'message_update','message':{'role':'assistant','content':[{'type':'text','text':'stream snapshot ' * 1000}]}}), file=f)\nprint(json.dumps({'type':'message_end','message':{'role':'assistant','stopReason':'error' if error else 'stop','errorMessage':'quota' if error else '', 'usage':{'input':100,'output':20,'cacheRead':30,'cacheWrite':10,'cost':{'total':0.125}}, 'content':[{'type':'text','text':'Evidence: checked fixture.'}]}}), file=f)\nif not os.environ.get('TEST_NO_SETTLED'): print(json.dumps({'type':'agent_settled'}), file=f)\nf.close()\nif os.environ.get('TEST_KILL_PI'): os.kill(os.getpid(), 9)\n"
         }.items():
             path = fakebin / name
             path.write_text(content); path.chmod(0o755)
@@ -1876,7 +2089,11 @@ print('fixture-private-output')
         self.assertIn('--approve', argv)
         self.assertEqual(argv[argv.index('--tui-mode') + 1], 'regular')
         self.assertEqual(argv[argv.index('-e') + 1], str(ROOT / 'bin/worker-events.ts'))
-        self.assertNotIn('Native Pi terminal output', (self.home / 'fix/events-1.jsonl').read_text())
+        event_log = (self.home / 'fix/events-1.jsonl').read_text()
+        self.assertNotIn('Native Pi terminal output', event_log)
+        updates = [json.loads(line) for line in event_log.splitlines() if json.loads(line)['type'] == 'message_update']
+        self.assertEqual(updates, [{'type': 'message_update'}] * 100, 'streaming keeps heartbeats, not repeated snapshots')
+        self.assertLess(len(event_log), 8192)
         self.assertIn("Evidence", m.snapshot(self.db, {"id": "fix"})["report"]["text"])
         duplicate = subprocess.run(command, env=env, cwd=task["worktree"], capture_output=True, timeout=10)
         self.assertNotEqual(duplicate.returncode, 0)

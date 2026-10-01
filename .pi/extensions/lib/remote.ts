@@ -190,7 +190,7 @@ export function registerRemoteUI(pi: ExtensionAPI, registerTool: ExtensionAPI["r
           warning = "Trust this remote repository, Treehouse setup and configured startup command? Authorize work only at this SHA and scope. Push/PR requires explicit approved scope; no remote PR merge or deploy authorization. The secondmate may dispatch after approval.";
         } else if (action === "complete") {
           const force = flag === "--force";
-          if (task.state !== "review" && !(force && task.state === "failed")) throw new Error("Only review, or failed with --force, can be accepted");
+          if (task.state !== "review" && !(force && ["failed", "attention"].includes(task.state))) throw new Error("Only review, or stopped failed/attention with --force, can be accepted");
           if (task.pending_scope || task.scope_history?.at(-1)?.first_attempt > task.attempt) throw new Error("Additional scope awaits approval/execution; review its new result first");
           method = "complete"; params = { id, attempt: task.attempt, scope_revision: task.scope_history?.length ?? 0, force }; title = "Accept remote task as complete?";
           warning = `${force ? "FORCE accepts possibly incomplete work. " : ""}Confirm you reviewed and accept this result. Stops idle Pi only; no tab closure, lease return, push or merge. Cleanup needs separate commands/confirmations.`;

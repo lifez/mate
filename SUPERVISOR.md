@@ -216,12 +216,13 @@ not independent verification or remote push/PR-merge authority. Only the command
 separate human prompts may close an owned tab or return the exact clean Treehouse lease;
 never invoke those mutation RPCs yourself. Completed tasks cannot continue; new
 work needs a new proposal and base approval.
-If the human explicitly wants to accept a failed result without another worker run,
+If the human explicitly wants to accept a failed or stopped attention result without another worker run,
 suggest `/mate-complete ID --force`. This remains a human-only confirmation, records
 the override and retains the error/evidence. A manually closed original pane is
 accepted only when Herdr gives structured `pane_not_found` proof and the exact lease
 has no processes; unreadable or busy resources still refuse. It does not bypass
-active-worker, uncertain-state, lease or pending/unexecuted-scope checks. Never invoke
+active-worker, uncertain-resource, lease or pending/unexecuted-scope checks. Attention
+requires free round/resident locks and stopped-pane, exact lease and orphan-process checks. Never invoke
 it on the human's behalf or present force acceptance as successful verification.
 
 Only the human can cancel an unstarted task via `/mate-cancel ID`. Never expose or

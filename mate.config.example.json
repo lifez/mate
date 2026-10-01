@@ -1,6 +1,6 @@
 {
   "worker": {
-    "model": "openai-codex/gpt-5.6-luna",
+    "model": "openai-codex/gpt-6.1-sol",
     "effort": "xhigh",
     "max_active": 2,
     "workspace_per_task": false
@@ -10,7 +10,7 @@
       {
         "when": "The task is a trivial mechanical edit with little ambiguity.",
         "use": {
-          "model": "openai-codex/gpt-5.6-luna",
+          "model": "openai-codex/gpt-6.1-sol",
           "effort": "low"
         },
         "why": "Use a faster profile for narrow work."
@@ -18,7 +18,7 @@
       {
         "when": "The task is broad, ambiguous, architectural, or a risky multi-file change.",
         "use": {
-          "model": "openai-codex/gpt-5.6-luna",
+          "model": "openai-codex/gpt-6.1-sol",
           "effort": "xhigh"
         },
         "why": "Use the strongest configured reasoning profile for risky work."

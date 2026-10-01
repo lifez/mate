@@ -701,8 +701,8 @@ def human_remote(rest, given):
     elif action == "complete":
         force = flag == "--force"
         history = task.get("scope_history") or []
-        if task["state"] != "review" and not (force and task["state"] == "failed"):
-            raise ValueError("Only review, or failed with --force, can be accepted")
+        if task["state"] != "review" and not (force and task["state"] in ("failed", "attention")):
+            raise ValueError("Only review, or stopped failed/attention with --force, can be accepted")
         if task.get("pending_scope") or (history and history[-1].get("first_attempt", 0) > task["attempt"]):
             raise ValueError("Additional scope awaits approval/execution; review its new result first")
         method, params, title = "complete", {"id": ident, "attempt": task["attempt"], "scope_revision": len(history), "force": force}, \
@@ -794,8 +794,8 @@ def human(argv):
         if task["state"] == "complete":
             print(f"{task['id']} is already complete")
             return
-        if task["state"] != "review" and not (force and task["state"] == "failed"):
-            raise ValueError("Only review tasks, or idle/stopped failed tasks with --force, can be completed")
+        if task["state"] != "review" and not (force and task["state"] in ("failed", "attention")):
+            raise ValueError("Only review tasks, or stopped failed/attention tasks with --force, can be completed")
         history = task.get("scope_history") or []
         if task.get("pending_scope") or (history and history[-1].get("first_attempt", 0) > task["attempt"]):
             raise ValueError("Additional scope awaits approval/execution; review its result before completion")
@@ -813,6 +813,8 @@ def human(argv):
             print(f"{done['id']} is complete.")
             if done.get("worker_control"):
                 print(f"Worker shutdown is unconfirmed: {done.get('worker_stop_error') or 'inspect the worker'}. Quit/inspect it before cleanup.")
+            elif done.get("completion_resources_absent"):
+                print("Worker pane, worktree and lease were already absent; no cleanup performed. Task history retained.")
             else:
                 print(f"Optional cleanup: {HUMAN} close-tab {ident}   then   {HUMAN} return-lease {ident}")
     elif command == "close-tab":

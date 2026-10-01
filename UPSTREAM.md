@@ -11,6 +11,18 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned missing-resource force completion: stopped attention tasks can be
+  human-accepted only with free worker/resident locks, structured missing-pane
+  proof, absent worktree and no saved path/lease/holder or process evidence.
+  Preserve receipts/history and record absence, not a fictitious lease return;
+  skip cleanup. No upstream import or provenance baseline change.
+
+- Mate-owned capacity adjustment: uncertain `attention` tasks reserve one
+  `worker.max_active` slot instead of blocking the entire fleet. Inspected recovery
+  reuses its own slot; endpoint, lease and execution-evidence gates are unchanged.
+  No upstream import or provenance baseline change. Disposable tests cover
+  11 attention tasks plus 9 dispatches at a limit of 20 and refusal at capacity.
+
 - Remote secondmate foundation, reference-only to local Firstmate
   `65a3bac6031286b4058360859a9522a50a09bb14` (no fetch): read
   `docs/remote-secondmates.md`, `bin/fm-on.sh`, and selected remote-spawn code in
@@ -59,6 +71,9 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   baselines/hashes/notices are unchanged. Tests use disposable state and localhost
   fake models, not real task data or provider quota. Stop all workers before updating;
   no schema migration, but do not downgrade while resident workers are open.
+  Mate-owned log-size fix stores streaming message updates as type-only heartbeats
+  at the Python persistence boundary; finalized messages, reports, usage and stall
+  detection remain unchanged. No additional upstream code or baseline update.
 
 - Mate-owned `/skill:ahoy`, adapted from Firstmate's Ahoy skill at local commit
   `a27646c` (read in full; no fetch). It keeps the visible-history recap, cross-boundary
@@ -178,7 +193,10 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   mocked Pi lifecycle, including two reports plus approval and bounded correction.
 
 - Mate-owned `/mate-complete ID --force`: human acceptance also permits stopped
-  failed tasks; reuse lock, original pane/process and lease checks, preserve scope
+  failed and attention tasks; attention also requires a free resident lock, sole idle
+  shell/empty lease inventory and no OS task/worktree process. Archive stale control
+  metadata without contacting the missing worker after proof of stoppage. Reuse
+  original pane/process and lease checks, preserve scope
   gates and failed-run evidence, record override/source state and keep tab closure
   separately confirmed. A manually closed pane is accepted only from structured
   `pane_not_found` plus the exact lease's empty process inventory; record that proof
@@ -206,7 +224,11 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   immutable creation receipt and accepts a changed terminal ID only for `review`/`failed`
   tasks after exact endpoint, lease, worktree/repository/branch/base ancestry, cwd,
   idle-shell, sole Treehouse process and orphan-process checks under the worker lock;
-  append old/new identity audit before one continuation launch. Selected Firstmate
+  append old/new identity audit before one continuation launch. Mate-owned follow-up
+  reuses that inspection for human-only force completion of stopped review/failed/
+  attention tasks; audit and acceptance commit together without launch or cleanup.
+  Attention also requires the resident lock and archives stale control metadata.
+  No new upstream import or provenance baseline change. Selected Firstmate
   `3e817d3` missing-endpoint recovery and `e0d269e` process-level stale-agent classifier
   as reference-only safety boundaries; Mate resumes its saved Pi session rather than
   importing Firstmate's fresh-agent relaunch/projection stack. Generic attention,

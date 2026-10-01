@@ -477,11 +477,11 @@ def review_scope(db, p):
 
 def check_capacity(db, inspected=None):
     fleet = tasks(db)
-    if any(t["state"] == "attention" and t["id"] != inspected for t in fleet):
-        raise ValueError("An uncertain task needs inspection before starting more workers")
     limit = mate_config().get("worker", {}).get("max_active", 2)
-    if sum(t["state"] in ("acquiring", "launching", "running") for t in fleet) >= limit:
-        raise ValueError(f"{limit} workers are already active")
+    # Uncertain workers may still be live; reserve a slot, not the entire fleet.
+    if sum(t["state"] in ("acquiring", "launching", "running", "attention")
+           and t["id"] != inspected for t in fleet) >= limit:
+        raise ValueError(f"{limit} workers are already active or uncertain")
 
 
 def worker_profile(p, previous=None):
@@ -710,6 +710,8 @@ def cancellation_process_checks(task):
         raise ValueError("Process inspection is unavailable or malformed; cancellation refused") from None
     markers = [str(HOME / task["id"]), task["id"], task["branch"], task["holder"],
                f"worker {task['id']} ", f"MATE_TASK_ID={task['id']}"]
+    if task.get("worktree"):
+        markers.append(task["worktree"])
     startup = task.get("startup")
     if isinstance(startup, dict):
         markers.extend(arg for arg in startup.get("command", [])
@@ -1183,6 +1185,34 @@ def resume(db, p):
     return confirm_recovered_worker(db, task) if initial else load(db, task["id"])
 
 
+def inspect_missing_completion_resources(task):
+    """Read-only proof for a stopped attention task whose resources were removed externally."""
+    wt = task["worktree"]
+    if not Path(wt).is_absolute() or wt == task["repo"] or str(Path(wt).resolve()) != wt:
+        raise ValueError("Saved worktree identity is uncertain; completion refused")
+    try:
+        os.lstat(wt)  # Unlike exists(), do not hide permission errors or dangling symlinks.
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("Worktree still exists; exact lease checks remain required")
+    lease = task.get("lease", {})
+    if not lease.get("lease_id") or lease.get("lease_holder") != task.get("holder"):
+        raise ValueError("Missing/mismatched Treehouse lease receipt")
+    cancellation_treehouse_checks(task)  # Reject unavailable status and any saved holder still in use.
+    rows = json.loads(run(["treehouse", "status", "--json"], cwd=task["repo"]))
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or
+            not isinstance(row.get("path"), str) or not Path(row["path"]).is_absolute() or
+            str(Path(row["path"]).resolve()) == wt or row.get("lease_id") == lease["lease_id"] or
+            row.get("lease_holder") == task["holder"] for row in rows):
+        raise ValueError("Treehouse still records the resource or its absence is uncertain")
+    cancellation_process_checks(task)
+    if herdr_pane_presence(task, task["pane"]) != "gone":
+        raise ValueError("Cannot confirm the exact worker pane is absent")
+    return dict(worktree=wt, lease_id=lease["lease_id"], lease_holder=task["holder"],
+                checked_at=time.time(), via="mate-complete --force")
+
+
 def complete(db, p):
     task = load(db, p["id"])
     if task["state"] == "complete":
@@ -1190,9 +1220,9 @@ def complete(db, p):
     force = p.get("force", False)
     if type(force) is not bool:
         raise ValueError("force must be a boolean")
-    if (task["state"] not in (("review", "failed") if force else ("review",)) or
+    if (task["state"] not in (("review", "failed", "attention") if force else ("review",)) or
         type(p.get("attempt")) is not int or p["attempt"] != task["attempt"]):
-        raise ValueError("Only the reviewed attempt (or stopped failed attempt with --force) shown in the confirmation can be completed")
+        raise ValueError("Only the reviewed attempt (or stopped failed/attention attempt with --force) shown in the confirmation can be completed")
     history = task.get("scope_history", [])
     if (task.get("pending_scope") or p.get("scope_revision", 0) != len(history) or
         (history and history[-1]["first_attempt"] > task["attempt"])):
@@ -1201,26 +1231,63 @@ def complete(db, p):
         guard = lock(HOME / task["id"] / "run.lock")
     except BlockingIOError:
         raise ValueError("Worker is still active; wait before completing the task") from None
+    resident_guard = None
     try:
+        stopped_attention = force and task["state"] == "attention"
+        if stopped_attention:
+            try:
+                resident_guard = lock(HOME / task["id"] / "resident.lock")
+            except BlockingIOError:
+                raise ValueError("Resident worker is still active; quit/inspect it before force completing attention") from None
         pane_gone = False
-        if task.get("worker_control"):
+        resources_absent = None
+        terminal_rebind = None
+        if task.get("worker_control") and not stopped_attention:
             check_resident(task)
         elif force:
             presence = herdr_pane_presence(task, task["pane"])
             if presence == "present":
-                ready_pane(task)
-                check_lease(task)
+                try:
+                    shell, processes = ready_pane(task)
+                except TerminalIdentityChanged:
+                    terminal_rebind = inspect_terminal_rebind(task)
+                    terminal_rebind["via"] = "mate-complete --force"
+                    shell, processes = ready_pane(task, terminal_rebind["new_terminal_id"])
+                lease = check_lease(task)
+                if stopped_attention:
+                    inventory = lease.get("processes")
+                    if (not isinstance(inventory, list) or len(inventory) != 1 or
+                        not isinstance(inventory[0], dict) or inventory[0].get("pid") != shell):
+                        raise ValueError("Treehouse process inventory is uncertain or contains other worktree processes")
             elif presence == "gone":
-                if check_lease(task).get("processes") != []:
+                if stopped_attention and not os.path.lexists(task["worktree"]):
+                    resources_absent = inspect_missing_completion_resources(task)
+                elif check_lease(task).get("processes") != []:
                     raise ValueError("Treehouse still reports worktree processes after the worker pane disappeared")
                 pane_gone = True
             else:
                 raise ValueError("Cannot confirm whether the exact worker pane still exists")
+            if stopped_attention:
+                args = (run(["ps", "-axo", "args="]).splitlines() if pane_gone else
+                        [row["args"] for pid, row in processes.items() if pid != shell])
+                markers = (str(HOME / task["id"]), task["worktree"],
+                           f"{ROOT / 'bin/mate.py'} worker {task['id']} ")
+                if any(any(marker in command for marker in markers) for command in args):
+                    raise ValueError("Possible orphan task/worktree process remains; force completion refused")
+        if resources_absent:
+            resources_absent = inspect_missing_completion_resources(task)
         if load(db, task["id"]) != task:
             raise ValueError("Task changed during completion checks; confirm again")
         with db:
+            if resources_absent:
+                task["completion_resources_absent"] = resources_absent
+            if terminal_rebind:
+                task.setdefault("terminal_rebindings", []).append(terminal_rebind)
+                task["terminal_id"] = terminal_rebind["new_terminal_id"]
             if force:
                 task["completed_from"] = task["state"]
+            if stopped_attention and task.get("worker_control"):
+                task["stopped_worker_control"] = task.pop("worker_control")
             if pane_gone:
                 task.update(pane_gone_at_completion=time.time(),
                             pane_gone_by=pwd.getpwuid(os.getuid()).pw_name)
@@ -1229,6 +1296,8 @@ def complete(db, p):
                         completed_via="mate-complete --force" if force else "mate-complete")
             save(db, task)
     finally:
+        if resident_guard is not None:
+            resident_guard.close()
         guard.close()
     if task.get("worker_control"):
         try:
@@ -2084,6 +2153,9 @@ def worker(ident, attempt):
                         replies.write(json.dumps(reply) + "\n")
                         replies.flush()
                         continue
+                    if item.get("type") == "message_update":
+                        # Streaming snapshots repeat the accumulated message; retain only a heartbeat.
+                        line = '{"type":"message_update"}\n'
                     with (folder / f"events-{rounds.attempt}.jsonl").open("a") as log:
                         log.write(line)
                     if item.get("type") == "message_end" and item.get("message", {}).get("role") == "assistant":
