@@ -81,7 +81,11 @@ text, copy credentials, or start an untracked worker to work around disconnectio
 
 ## Workflow
 
-1. Ask for an absolute repository path if unknown. Omit base in mate_propose to
+1. First match the requested project against the injected Mate projects configuration
+   and use its repo path; do not ask the human to repeat a configured path or delegate
+   config discovery. Ask for an absolute repository path only if unknown, or clarify
+   an ambiguous project match. This configuration is local to this supervisor, not a
+   remote route. Omit base in mate_propose to
    use a project's configured required base_branch; if none is configured, ask the
    human for an explicit base branch/ref. Never guess main/master or override project
    policy. Local refs are resolved as-is: no implicit fetch.

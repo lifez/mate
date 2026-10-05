@@ -36,7 +36,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-coding-agent': join(installed, 'dist/index.js'),
   '@earendil-works/pi-tui': join(installed, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
 } });
-const { default: factory, workerProfile, dispatchProfile, dispatchInstructions, codexQuotaStatus } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
+const { default: factory, workerProfile, dispatchProfile, dispatchInstructions, projectInstructions, codexQuotaStatus } = await jiti.import(join(root, '.pi/extensions/mate-supervisor.ts'));
 const { statusPreview } = await jiti.import(join(root, '.pi/extensions/lib/calm.ts'));
 const { renderBearingsBoard } = await jiti.import(join(root, '.pi/extensions/lib/bearings.ts'));
 process.env.MATE_HOME = join(tmp, 'home');
@@ -179,7 +179,14 @@ try {
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), { provider: 'openai-codex', model: 'main-model', effort: 'low' }, 'config reread without reload');
   configure({ projects: { fixture: { repo: '/fixture', base_branch: 'main', startup: { command: ['true'] } } } });
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}), 'projects do not alter worker defaults');
+  assert.deepEqual(JSON.parse(projectInstructions(configPath).split('\n')[1]), { fixture: { repo: '/fixture', base_branch: 'main' } });
+  assert.doesNotMatch(projectInstructions(configPath), /startup|command|true/, 'only project paths/base policy reach the model');
+  configure({ projects: { research: { repo: '/research' } } });
+  assert.deepEqual(JSON.parse(projectInstructions(configPath).split('\n')[1]), { research: { repo: '/research' } }, 'never invent a base');
+  configure({ projects: { broken: null } });
+  assert.throws(() => projectInstructions(configPath), /Invalid project config/);
   configure({});
+  assert.equal(projectInstructions(configPath), '');
   assert.deepEqual(dispatchProfile(ctx, {}, configPath), workerProfile(ctx, {}));
   const dispatch = { rules: [{ when: 'The task is broad or risky.',
     use: { model: 'openai-codex/worker-model', effort: 'xhigh' }, why: 'Use strong reasoning.' }] };
@@ -244,6 +251,13 @@ try {
   assert.match(notices.at(-1)[0], /Read-only/);
   const basePrompt = 'base\n\n' + readFileSync(join(root, 'SUPERVISOR.md'), 'utf8') + '\n\n' + dispatchInstructions();
   assert.equal((await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt, basePrompt);
+  const installationConfig = readFileSync(join(root, 'mate.config.json'), 'utf8');
+  writeFileSync(join(root, 'mate.config.json'), JSON.stringify({ projects: { 'mutual-fund': { repo, base_branch: 'main', startup: { command: ['STARTUP_SENTINEL'] } } } }));
+  const projectPrompt = (await handlers.before_agent_start({ systemPrompt: 'base' }, ctx)).systemPrompt;
+  assert.match(projectPrompt, /Mate projects \(trusted local configuration, not human approval\)/);
+  assert.ok(projectPrompt.includes(JSON.stringify({ 'mutual-fund': { repo, base_branch: 'main' } })), 'project-only config reaches the supervisor without reload');
+  assert.doesNotMatch(projectPrompt, /STARTUP_SENTINEL/);
+  writeFileSync(join(root, 'mate.config.json'), installationConfig);
   assert.equal(handlers.tool_call({ toolName: 'mate_memory' }), undefined);
   const beforeStow = await call('mate_status');
   const emptyMemory = await call('mate_memory');

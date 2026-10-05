@@ -40,6 +40,24 @@ class MateClaudeTests(unittest.TestCase):
         self.assertEqual(set(mc.RPC), set(mc.TOOLS))
         self.assertEqual(set(mc.SCHEMAS), set(mc.TOOLS))
 
+    def test_project_configuration_reaches_supervisor_policy_without_dispatch_rules(self):
+        projects = {"mutual-fund": {"repo": "/fixture/mutual-fund", "base_branch": "main",
+                                    "startup": {"command": ["STARTUP_SENTINEL"]}},
+                    "research": {"repo": "/fixture/research"}}
+        self.configure({"projects": projects})
+        instructions = mc.project_instructions(mc.mate.mate_config())
+        self.assertEqual(json.loads(instructions.split("\n")[1]), {
+            "mutual-fund": {"repo": "/fixture/mutual-fund", "base_branch": "main"},
+            "research": {"repo": "/fixture/research"}})
+        with patch.object(mc.mate, "connect"), patch.object(mc.mate, "memory", return_value={}):
+            policy = mc.policy()
+        self.assertIn(instructions, policy)
+        self.assertNotIn("STARTUP_SENTINEL", policy)
+        self.assertEqual(mc.project_instructions({}), "")
+        self.assertEqual(mc.project_instructions({"projects": {}}), "")
+        with self.assertRaisesRegex(ValueError, "Invalid project config"):
+            mc.project_instructions({"projects": {"broken": None}})
+
     def test_dispatch_profile_matches_pi_rules_without_a_model_registry(self):
         self.configure({})
         with self.assertRaisesRegex(ValueError, "Pass a model"):

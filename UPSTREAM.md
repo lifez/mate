@@ -11,6 +11,11 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned supervisor project context: Pi and Claude receive only configured
+  project names, repo paths and base branches, not startup commands. Named-project
+  proposals no longer require delegated config discovery; human base approval and
+  exact repository matching remain unchanged. No upstream import or baseline change.
+
 - Mate-owned missing-resource force completion: stopped attention tasks can be
   human-accepted only with free worker/resident locks, structured missing-pane
   proof, absent worktree and no saved path/lease/holder or process evidence.

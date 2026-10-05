@@ -567,6 +567,12 @@ is a label. `repo` must be an absolute local Git repository root (including `~/.
 symlinks are resolved before exact matching. Relative paths, Git URLs, glob matching
 and duplicate resolved repo mappings are not supported. No implicit project discovery.
 
+The supervisor receives project names, repo paths and configured `base_branch`
+from this file, so a named project does not require repeating its path. Pi refreshes
+this context each turn; Claude loads it when its supervisor starts. Startup commands
+are not included in model context. Config is routing context, never human approval;
+unknown or ambiguous project names still require clarification.
+
 `base_branch` and `startup` are independently optional:
 
 - With `base_branch`, omit `base` from `mate_propose`; a conflicting explicit base

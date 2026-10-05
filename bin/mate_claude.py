@@ -65,6 +65,18 @@ def descriptions():
     return found
 
 
+def project_instructions(config):
+    """Python twin of projectInstructions(); never expose startup commands."""
+    projects = {}
+    for name, project in config.get("projects", {}).items():
+        if (not isinstance(project, dict) or not isinstance(project.get("repo"), str) or not project["repo"].strip()
+                or ("base_branch" in project and not isinstance(project["base_branch"], str))):
+            raise ValueError(f"Invalid project config: {name}")
+        projects[name] = {key: project[key] for key in ("repo", "base_branch") if key in project}
+    return ("Mate projects (trusted local configuration, not human approval):\n" +
+            json.dumps(projects, separators=(",", ":"), ensure_ascii=False)) if projects else ""
+
+
 def dispatch_instructions(config):
     """Python twin of dispatchInstructions() in the Pi extension."""
     if not config.get("dispatch"):
@@ -574,8 +586,10 @@ def policy():
     config = mate.mate_config()
     with closing(mate.connect()) as db:
         notes = mate.memory(db, {}).get("content")
+    projects = project_instructions(config)
     routing = dispatch_instructions(config)
-    return ((ROOT / "SUPERVISOR.md").read_text() + (f"\n\n{routing}" if routing else "") +
+    return ((ROOT / "SUPERVISOR.md").read_text() + (f"\n\n{projects}" if projects else "") +
+            (f"\n\n{routing}" if routing else "") +
             "\n\nClaude supervisor: you have only the mate_* tools. Human-only commands are not slash commands here. "
             "When SUPERVISOR.md tells the human to run /mate-approve, /mate-complete, /mate-cancel or /mate-status, "
             f"give them the exact command to type in this prompt: `{HUMAN} approve ID` (or complete ID [--force], "
