@@ -564,9 +564,10 @@ Finish with what was captured, storage/revision, bytes before/after, and anythin
         if (task.lease_return_state) throw new Error("Task remains complete, but previous Treehouse return is uncertain; inspect manually");
         const leaseParams = { id: task.id, attempt: task.attempt, worktree: task.worktree,
           lease_id: task.lease?.lease_id, lease_holder: task.lease?.lease_holder };
-        const changes: string[] = (await rpc("inspect_return_lease", leaseParams)).changes;
+        const inspection = await rpc("inspect_return_lease", leaseParams);
+        const changes: string[] = inspection.changes;
         const dirty = changes.length
-          ? `\n\nUncommitted files:\n${changes.join("\n")}\n\nAccepting permanently discards these tracked changes and untracked files before returning the lease.`
+          ? `\n\n${inspection.summary ?? "Uncommitted files:"}\n${changes.join("\n")}\n\nAccepting permanently discards these tracked changes and untracked files before returning the lease.`
           : "";
         const release = await ctx.ui.confirm("Return Treehouse worktree too?",
           `${task.id}\nWorktree: ${task.worktree}\nLease: ${task.lease?.lease_id}\nHolder: ${task.lease?.lease_holder}${dirty}\n\nReturn only this exact lease. Mate refuses unexpected processes and never passes --force to Treehouse. Treehouse may terminate the retained worker pane shell, detach/reset the pooled worktree and reuse it. The task branch, Mate reports, Pi session and cost records remain.`);

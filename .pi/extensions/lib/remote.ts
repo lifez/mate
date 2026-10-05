@@ -204,10 +204,10 @@ export function registerRemoteUI(pi: ExtensionAPI, registerTool: ExtensionAPI["r
           if (task.state !== "complete") throw new Error("Complete the task before cleanup");
           if (task.worker_control) throw new Error("Remote Pi shutdown is unconfirmed; inspect before cleanup");
           const lease = { id, attempt: task.attempt, worktree: task.worktree, lease_id: task.lease?.lease_id, lease_holder: task.lease?.lease_holder };
-          const { changes } = await fleet.call(name, "inspect_return_lease", lease);
+          const { changes, summary } = await fleet.call(name, "inspect_return_lease", lease);
           if (!Array.isArray(changes) || changes.some(value => typeof value !== "string")) throw new Error("Invalid remote worktree inspection");
           method = "return_lease"; params = { ...lease, clean: changes.length > 0, changes }; title = "Return remote Treehouse lease?";
-          warning = `Lease: ${lease.lease_id}\nHolder: ${lease.lease_holder}\n${changes.length ? "PERMANENTLY DISCARD these uncommitted files:\n" + changes.join("\n") : "Worktree is clean."}\nReturn only this exact lease; may end its shell and reset/reuse the pooled worktree. Branch/reports/session stay. Never uses --force.`;
+          warning = `Lease: ${lease.lease_id}\nHolder: ${lease.lease_holder}\n${changes.length ? (summary ?? "Uncommitted files:") + "\nPERMANENTLY DISCARD these uncommitted files:\n" + changes.join("\n") : "Worktree is clean."}\nReturn only this exact lease; may end its shell and reset/reuse the pooled worktree. Branch/reports/session stay. Never uses --force.`;
         } else {
           const inspection = await fleet.call(name, "inspect_cancel", { id });
           if (inspection.already_cancelled) { ctx.ui.notify("Already cancelled", "info"); return; }

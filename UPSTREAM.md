@@ -11,6 +11,14 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned dirty-worktree UX, reference-only to Firstmate #6505 (`918a5bf1`):
+  one shared Git-status summary distinguishes tracked edits from untracked-only
+  leftovers in launch refusals and local/remote Pi/Claude lease-return dialogs.
+  Full changed-path lists and exact cleanup confirmation remain unchanged.
+  Worker guidance places disposable scratch/proof in task-specific temporary
+  directories, never directly in Mate state. No quota, waiting, watcher or cleanup
+  authority change; no upstream code copied or component baseline advanced.
+
 - Mate-owned supervisor project context: Pi and Claude receive only configured
   project names, repo paths and base branches, not startup commands. Named-project
   proposals no longer require delegated config discovery; human base approval and

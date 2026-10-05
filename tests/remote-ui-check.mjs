@@ -120,7 +120,7 @@ try {
   const cleanupFleet = { epoch: () => 0, route: () => route, call: async (_route, method, params, revision) => {
     cleanupCalls.push({ method, params, revision });
     if (method === 'status') return { remote_home: route.home, tasks: [cleanupTask] };
-    if (method === 'inspect_return_lease') return { changes: ['?? generated.txt'] };
+    if (method === 'inspect_return_lease') return { changes: ['?? generated.txt'], summary: 'Worktree has uncommitted changes (untracked-only leftovers): 0 tracked path(s), 1 untracked path(s).' };
     if (method === 'inspect_cancel') return { confirmation: 'cancel-token', requires_external_attestation: true, checks: ['Fixture orphan inspection'] };
     return cleanupTask;
   } };
@@ -134,6 +134,8 @@ try {
   await cleanup('return');
   assert.ok(!cleanupCalls.some(call => call.method === 'return_lease'));
   assert.match(confirmations.at(-1).body, /generated.txt/);
+  assert.match(confirmations.at(-1).body, /untracked-only leftovers/);
+  assert.match(confirmations.at(-1).body, /PERMANENTLY DISCARD/);
   approve = true;
   let effect = await cleanup('return');
   assert.equal(effect.method, 'return_lease');

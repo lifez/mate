@@ -734,12 +734,13 @@ def human_remote(rest, given):
             raise ValueError("Complete the task and confirm worker shutdown before cleanup")
         lease = {"id": ident, "attempt": task["attempt"], "worktree": task["worktree"],
                  "lease_id": (task.get("lease") or {}).get("lease_id"), "lease_holder": (task.get("lease") or {}).get("lease_holder")}
-        changes = call("inspect_return_lease", lease)["changes"]
+        inspection = call("inspect_return_lease", lease)
+        changes = inspection["changes"]
         if not isinstance(changes, list) or not all(isinstance(c, str) for c in changes):
             raise ValueError("Invalid remote worktree inspection")
         method, params, title = "return_lease", {**lease, "clean": bool(changes), "changes": changes}, "Return remote Treehouse lease?"
         warning = (f"Lease: {lease['lease_id']}\nHolder: {lease['lease_holder']}\n" +
-                   ("PERMANENTLY DISCARD these uncommitted files:\n" + "\n".join(changes) if changes else "Worktree is clean.") +
+                   (inspection.get("summary", "Uncommitted files:") + "\nPERMANENTLY DISCARD these uncommitted files:\n" + "\n".join(changes) if changes else "Worktree is clean.") +
                    "\nReturn only this exact lease. Branch/reports/session stay. Never uses --force.")
     else:
         inspection = call("inspect_cancel", {"id": ident})
@@ -846,8 +847,9 @@ def human(argv):
             raise ValueError("Only a completed task whose lease was not returned can return it")
         lease = {"id": task["id"], "attempt": task["attempt"], "worktree": task["worktree"],
                  "lease_id": task.get("lease", {}).get("lease_id"), "lease_holder": task.get("lease", {}).get("lease_holder")}
-        changes = human_call("inspect_return_lease", lease)["changes"]
-        dirty = (f"\n\nUncommitted files:\n" + "\n".join(changes) + "\n\nConfirming permanently discards these tracked changes "
+        inspection = human_call("inspect_return_lease", lease)
+        changes = inspection["changes"]
+        dirty = ("\n\n" + inspection.get("summary", "Uncommitted files:") + "\n" + "\n".join(changes) + "\n\nConfirming permanently discards these tracked changes "
                  "and untracked files before returning the lease.") if changes else ""
         text = (f"{task['id']}\nWorktree: {task['worktree']}\nLease: {lease['lease_id']}\nHolder: {lease['lease_holder']}{dirty}\n\n"
                 "Return only this exact lease. Mate refuses unexpected processes and never passes --force to Treehouse. "

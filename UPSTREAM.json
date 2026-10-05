@@ -166,6 +166,14 @@
   "deferred_updates": [],
   "local_changes": [
     {
+      "component_ids": ["R04", "R06"],
+      "description": "Mate-owned dirty-worktree UX: shared Git-status summary distinguishes tracked edits and untracked-only leftovers in launch refusals and local/remote Pi/Claude lease-return dialogs. Preserve full changed paths, exact cleanup confirmations and safety gates. Task-specific temporary scratch guidance never grants direct Mate state writes. No quota/waiting/watcher changes or upstream code copied; original baselines retained.",
+      "source_commit": "918a5bf15c1563949842903aca2df8091bcf4f17",
+      "reviewed_scope": "Firstmate #6505 fm-brief.sh scratch guidance and fm-teardown.sh dirty diagnostics diff only; reference-only, no full component audit.",
+      "paths": ["bin/mate.py", "bin/mate_claude.py", ".pi/extensions/mate-supervisor.ts", ".pi/extensions/lib/remote.ts", "WORKER.md", "tests/test_mate.py", "tests/remote-ui-check.mjs"],
+      "local_commit": null
+    },
+    {
       "component_ids": ["R02", "R03", "R06"],
       "description": "Mate-owned human force acceptance of stopped attention with structured missing-pane proof, absent worktree, no saved Treehouse path/lease/holder and no task process evidence under both locks. Preserve receipts and audit absence; no cleanup or fictitious lease return. No upstream import or baseline change.",
       "paths": ["bin/mate.py", ".pi/extensions/mate-supervisor.ts", "bin/mate_claude.py", "tests/test_mate.py", "tests/extension-check.mjs", "README.md"],

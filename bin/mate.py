@@ -572,8 +572,9 @@ def dispatch(db, p):
             raise ValueError("Treehouse did not yield an isolated worktree")
         if git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir") != git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir"):
             raise ValueError("Treehouse worktree belongs to a different repository")
-        if git(wt, "status", "--porcelain"):
-            raise ValueError("Leased worktree is dirty; preserved without reset")
+        changes = git(wt, "status", "--porcelain").splitlines()
+        if changes:
+            raise ValueError("Leased worktree is dirty; preserved without reset. " + worktree_changes_summary(changes))
         # Preserve the pooled branch and all its commits. Never reset --hard.
         git(wt, "-c", "core.hooksPath=/dev/null", "switch", "-c", task["branch"], task["sha"])
         if git(wt, "rev-parse", "HEAD") != task["sha"]:
@@ -1316,6 +1317,15 @@ def complete(db, p):
     return task  # No acknowledgement, resource cleanup, or Git operations.
 
 
+def worktree_changes_summary(changes):
+    if not changes:
+        return 'Worktree is clean.'
+    untracked = sum(line.startswith('?? ') for line in changes)
+    tracked = len(changes) - untracked
+    kind = 'includes tracked edits' if tracked else 'untracked-only leftovers'
+    return f'Worktree has uncommitted changes ({kind}): {tracked} tracked path(s), {untracked} untracked path(s).'
+
+
 def inspect_return_lease(db, p):
     task = load(db, p['id'])
     lease = task.get('lease', {})
@@ -1323,8 +1333,9 @@ def inspect_return_lease(db, p):
         p.get('worktree') != task.get('worktree') or p.get('lease_id') != lease.get('lease_id') or
         p.get('lease_holder') != lease.get('lease_holder')):
         raise ValueError('Lease return requires the exact completed task/attempt/worktree/lease')
-    return {'changes': git(task['worktree'], '-c', 'status.showUntrackedFiles=all',
-                           'status', '--porcelain').splitlines()}
+    changes = git(task['worktree'], '-c', 'status.showUntrackedFiles=all',
+                  'status', '--porcelain').splitlines()
+    return {'changes': changes, 'summary': worktree_changes_summary(changes)}
 
 
 def return_lease(db, p):
@@ -1361,7 +1372,7 @@ def return_lease(db, p):
         if type(clean) is not bool:
             raise ValueError('clean must be a boolean')
         if changes and not clean:
-            raise ValueError('Worktree has uncommitted changes; commit or remove them before returning the lease')
+            raise ValueError(worktree_changes_summary(changes) + ' Commit or remove them before returning the lease.')
         if clean:
             if p.get('changes') != changes:
                 raise ValueError('Worktree changes differ from the files shown for confirmation; inspect again')

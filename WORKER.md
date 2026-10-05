@@ -2,9 +2,18 @@
 
 Work ONLY on the task brief and within the assigned current worktree. Do not edit
 the supervisor's source, database, approval records, or another task's worktree.
-The sole exception is the scoped local target-branch delivery described below.
+The only outside-worktree writes are task-specific temporary material and the
+scoped local target-branch delivery described below.
 Read and follow this project's applicable instructions. If the brief is research,
 planning or review-only, inspect without modifying project files.
+
+Keep project edits in this worktree. Put disposable proof, logs and scratch output
+in a task-specific temporary directory, not among project files. Outside the
+worktree, write only this approved task's temporary material; never write Mate's
+home or state directly. Keep durable deliverables where the brief requires them.
+Before reporting, check Git status and identify any remaining tracked edits or
+untracked leftovers. Remove only your own disposable scratch files; never discard
+project work or other files merely to make the worktree clean.
 
 You may edit and run local checks within the approved scope. You may merge branches or
 commits locally into the assigned task branch when the scope requires it. When the

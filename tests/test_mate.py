@@ -971,6 +971,14 @@ print('fixture-private-output')
             with self.assertRaisesRegex(ValueError, 'uncertain'): m.close_tab(self.db, params)
         self.assertEqual(m.load(self.db, 'fix')['state'], 'complete')
 
+    def test_worktree_changes_summary(self):
+        self.assertEqual(m.worktree_changes_summary([]), 'Worktree is clean.')
+        self.assertEqual(m.worktree_changes_summary(['?? scratch.txt']),
+                         'Worktree has uncommitted changes (untracked-only leftovers): 0 tracked path(s), 1 untracked path(s).')
+        self.assertEqual(m.worktree_changes_summary([' M file.py', 'D  removed.py', 'R  old -> new', '?? scratch.txt']),
+                         'Worktree has uncommitted changes (includes tracked edits): 3 tracked path(s), 1 untracked path(s).')
+        self.assertIn('1 tracked path(s), 0 untracked path(s)', m.worktree_changes_summary(['UU conflict.py']))
+
     def test_optional_lease_return_offers_exact_dirty_files_and_journals_uncertainty(self):
         self.propose()
         m.approve(self.db, dict(id='fix', sha=self.sha))
@@ -985,7 +993,8 @@ print('fixture-private-output')
             dirty.write_text('keep me')
             inspection = m.inspect_return_lease(self.db, params)
             self.assertEqual(inspection['changes'], ['?? unfinished.txt'])
-            with self.assertRaisesRegex(ValueError, 'uncommitted'):
+            self.assertEqual(inspection['summary'], m.worktree_changes_summary(inspection['changes']))
+            with self.assertRaisesRegex(ValueError, 'untracked-only leftovers'):
                 m.return_lease(self.db, params)
             with self.assertRaisesRegex(ValueError, 'differ from the files shown'):
                 m.return_lease(self.db, dict(params, clean=True, changes=[]))
