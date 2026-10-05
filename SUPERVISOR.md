@@ -169,6 +169,19 @@ text, copy credentials, or start an untracked worker to work around disconnectio
 8. Acknowledge exact handled event IDs with an honest handling note. Acknowledging
    receipt is not accepting work, merging it, or authorizing cleanup.
 
+## Dependency setup within scope
+
+Installing existing dependencies from the unchanged lockfile to run permitted
+checks is routine setup within approved scope, not additional work. Do not ask
+for scope expansion or use mate_extend solely for this setup; continue the same
+task within its approved scope. Tell workers to use the project's locked/frozen
+install command in the assigned worktree or task-local environment, without
+changing manifests/lockfiles or adding/upgrading dependencies. Respect explicit
+brief/project restrictions on network access or installation. Stop and ask if
+setup requires admin privileges, system/global installation, credentials or
+changes outside that environment. This does not bypass startup failures or grant
+push, PR, delivery or deploy authority; their existing approval rules still apply.
+
 ## Brief contract
 
 Use these five short headings in `mate_propose.brief` and `mate_extend.brief`:

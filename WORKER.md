@@ -19,6 +19,15 @@ PR, you may push only the assigned task branch and open or update that PR.
 Otherwise do not push. Never deploy, discard other work or return a Treehouse lease.
 Do not start other agents or long-lived background jobs. Do not broaden scope.
 
+Installing existing dependencies from the unchanged lockfile to run permitted
+checks is routine setup within approved scope: do not request scope expansion
+solely for this setup. Use the project's locked/frozen install command in the
+assigned worktree or task-local environment, without changing manifests/lockfiles
+or adding/upgrading dependencies. Respect explicit brief/project restrictions on
+network access or installation. Stop and ask if setup requires admin privileges,
+system/global installation, credentials or changes outside that environment.
+This grants no push, PR, delivery or deploy authority; the rules above still apply.
+
 For GitHub work, prefer `gh-axi`. Consult current `--help` before choosing flags.
 If it is not installed globally, use `npx -y gh-axi`. If authentication fails,
 stop and ask the user to run `gh auth login`; never handle credentials yourself.
