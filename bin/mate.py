@@ -423,6 +423,37 @@ def approve(db, p):
     return task
 
 
+def extend_scope(db, p):
+    """Trusted supervisor records Chef's added request; execution is a separate round."""
+    task = load(db, p["id"])
+    if task["state"] not in ("review", "failed"):
+        raise ValueError("Only a stopped review/failed task can extend scope")
+    addition = text(p["brief"], "additional scope")
+    with lock(HOME / task["id"] / "run.lock"):
+        if task.get("worker_control"):
+            check_resident(task)
+        if load(db, task["id"]) != task:
+            raise ValueError("Task changed during scope checks")
+        history = task.setdefault("scope_history", [])
+        if (history and history[-1].get("approved_via") == "mate_extend" and
+                history[-1]["brief"] == addition and not task.get("pending_scope")):
+            return task
+        entry = dict(token=uuid.uuid4().hex, brief=addition, attempt=task["attempt"],
+                     approved_at=time.time(), approved_via="mate_extend",
+                     authority="supervisor-relayed Chef request", first_attempt=task["attempt"] + 1)
+        # Preserve legacy proposals as evidence, never silently approve their text.
+        if task.get("pending_scope"):
+            entry["superseded_pending_scope"] = task.pop("pending_scope")
+        task.setdefault("original_brief", task["brief"])
+        task["brief"] += "\n\nAdditional Chef scope:\n" + addition
+        history.append(entry)
+        with db:
+            save(db, task)
+            event(db, task, "scope-added-" + entry["token"],
+                  "Supervisor recorded Chef's added scope. Inspect current task; use mate_continue in the same worktree/session. No worker started; no additional approval needed.")
+    return task
+
+
 def propose_scope(db, p):
     task = load(db, p["id"])
     if task["state"] not in ("review", "failed"):
@@ -1722,7 +1753,8 @@ class NativeEvents:
 def serve():
     db = connect()
     owner = lock(HOME / "supervisor.lock")  # Kernel releases it on crash; no stale PID stealing.
-    methods = dict(propose=propose, approve=approve, propose_scope=propose_scope, review_scope=review_scope,
+    methods = dict(propose=propose, approve=approve, extend_scope=extend_scope,
+                   propose_scope=propose_scope, review_scope=review_scope,
                    dispatch=dispatch, resume=resume, inspect_cancel=inspect_cancel, cancel=cancel,
                    status=snapshot, memory=memory, ack=acknowledge, complete=complete,
         inspect_return_lease=inspect_return_lease, return_lease=return_lease, close_tab=close_tab)
@@ -1981,7 +2013,7 @@ def run_claude(db, task, rounds, prompt, policy):
             if not joining:
                 state["transcript"] = transcript
                 state["offset"] = os.path.getsize(transcript) if transcript and os.path.exists(transcript) else 0
-            return "Current human-approved task scope (follow-ups cannot expand it):\n" + admitted["brief"]
+            return "Current task scope (including supervisor-relayed Chef additions; follow-ups cannot expand it):\n" + admitted["brief"]
         if name == "PreToolUse":
             if not state["admitted"] or rounds.guard is None or state["closing"]:
                 raise ValueError("No admitted Mate worker round")
@@ -2109,7 +2141,7 @@ def worker(ident, attempt):
     session = folder / "session.jsonl"
     prompt = task.get("followup", task["brief"])
     if task.get("scope_history"):
-        prompt = "Current human-approved scope (including additions):\n" + task["brief"] + "\n\nContinuation instructions (within this scope only):\n" + prompt
+        prompt = "Current task scope (including supervisor-relayed Chef additions):\n" + task["brief"] + "\n\nContinuation instructions (within this scope only):\n" + prompt
     policy = (ROOT / "WORKER.md").read_text()
     child = None
     error = ""

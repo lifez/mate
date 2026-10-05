@@ -11,6 +11,19 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
 
 ## Current implementation
 
+- Mate-owned trusted-supervisor scope additions and Chef vocabulary, reference-only
+  to local Firstmate `f470a01c` (no fetch): inspected `AGENTS.md` request-change/
+  steering contract and `bin/fm-task-inbox-lib.sh` durable record/ack contract.
+  `mate_extend` now records explicit Chef requests immediately without another
+  human scope approval. Preserve original approval, per-addition history, durable
+  events, exact stopped-round checks and reviewed-run completion. Remove the
+  accumulated 20,000-character gate (each incoming addition remains bounded).
+  Pi/Claude and remote supervisors share the same operation. Legacy pending-scope
+  review remains compatible; explicit new requests archive superseded proposals.
+  Chef is the canonical human-facing board/brief terminology. No Firstmate code
+  copied or component baseline advanced. Unlike Firstmate, active workers still
+  settle before additions/continuation; no terminal doorbell/inbox stack imported.
+
 - Mate-owned dirty-worktree UX, reference-only to Firstmate #6505 (`918a5bf1`):
   one shared Git-status summary distinguishes tracked edits from untracked-only
   leftovers in launch refusals and local/remote Pi/Claude lease-return dialogs.
@@ -113,7 +126,7 @@ pull Firstmate ทับ Mate ไม่มี runtime import/source จาก `.
   payloads. Human dialogs retain full reads and existing approval/completion gates.
   No journal/schema mutation.
 - R06 reference-only brief authoring contract: selected `bin/fm-brief.sh` at local
-  Firstmate `a27646c` (no fetch), specifically Captain's intent vs Firstmate spec and
+  Firstmate `a27646c` (no fetch), specifically human intent (Mate's Chef's intent) vs Firstmate spec and
   explicit deliverable/evidence sections. Mate uses five concise sections in its
   existing brief string, adding exclusions and stop conditions; preserves human
   restrictions, legacy briefs and existing approval. No scaffold code copied,

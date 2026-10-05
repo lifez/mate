@@ -101,7 +101,7 @@ try {
     { id: 'done', state: 'complete', project: 'mate', attempt: 1, usage_total: {} },
     { id: 'next', state: 'approved', project: 'mate', attempt: 0, usage_total: {} },
   ], events: [{ task: 'shipping', kind: 'report', note: 'Ready' }] });
-  for (const heading of ['Captain’s Call', 'Recently Landed', 'Underway', 'Charted Next']) assert.match(board, new RegExp(heading));
+  for (const heading of ['Chef’s Call', 'Recently Landed', 'Underway', 'Charted Next']) assert.match(board, new RegExp(heading));
   assert.match(board, /Copy \/mate-approve needs-approval/);
   assert.doesNotMatch(board, /<script>bad\(\)<\/script>/, 'task content cannot escape into markup');
   assert.match(board, /Read-only board/);
@@ -395,7 +395,7 @@ try {
   assert.match(tools.mate_continue.description, /No worker lock after 60s/);
   assert.match(tools.mate_continue.description, /Never force/);
   const brief = '## User intent\nตรวจ fixture แบบ read-only\n## Mate spec\nReport file references.\n## Exclusions\nNo edits or tests.\n## Acceptance evidence\nReferences, tests NOT RUN.\n## Stop conditions\nAsk if fixture is missing.';
-  assert.match(tools.mate_propose.parameters.properties.brief.description, /User intent/);
+  assert.match(tools.mate_propose.parameters.properties.brief.description, /Chef's intent/);
   assert.match(tools.mate_extend.description, /five brief sections/);
   assert.equal(tools.mate_status.parameters.properties.history.type, 'boolean');
   await call('mate_propose', { id: 'inspect', repo, base: 'main', brief });
@@ -451,30 +451,13 @@ try {
   const initialScope = (await call('mate_status', { id: 'inspect' })).tasks[0].brief;
   const scopeParams = { id: 'inspect', brief: 'Also check accessibility.' };
   await call('mate_extend', scopeParams);
-  await commands['mate-approve'].handler('inspect', { ...ctx, mode: 'rpc' });
-  assert.ok((await call('mate_status', { id: 'inspect' })).tasks[0].pending_scope, 'TUI only');
-  approval = false;
-  await commands['mate-approve'].handler('inspect', ctx);
   let scoped = (await call('mate_status', { id: 'inspect' })).tasks[0];
-  assert.equal(scoped.pending_scope, undefined, 'decline discards pending addition');
-  assert.equal(scoped.brief, initialScope);
+  assert.equal(scoped.pending_scope, undefined, 'Chef addition needs no approval dialog');
+  assert.ok(scoped.brief.startsWith(initialScope));
+  assert.ok(scoped.brief.includes(scopeParams.brief));
   await call('mate_extend', scopeParams);
-  // Replace the proposal while its confirmation is open; accepting old text must fail.
-  await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async () => {
-    await call('mate_extend', { ...scopeParams, brief: 'Revised accessibility checks.' });
-    return true;
-  } } });
-  assert.equal(notices.at(-1)[1], 'error');
-  assert.equal((await call('mate_status', { id: 'inspect' })).tasks[0].brief, initialScope);
-  let dialog;
-  await commands['mate-approve'].handler('inspect', { ...ctx, ui: { ...ctx.ui, confirm: async (title, body) => {
-    dialog = title + '\n' + body; return true;
-  } } });
   scoped = (await call('mate_status', { id: 'inspect' })).tasks[0];
-  assert.match(dialog, /Approve additional task scope/);
-  assert.ok(dialog.includes(initialScope) && dialog.includes(scoped.sha));
-  assert.match(dialog, /Revised accessibility checks/);
-  assert.equal(scoped.state, 'review', 'approval does not dispatch or launch');
+  assert.equal(scoped.state, 'review', 'recording scope does not dispatch or launch');
   assert.equal(scoped.scope_revision, 1);
   assert.equal(scoped.latest_scope.first_attempt, 2);
   assert.equal(scoped.scope_history, undefined, 'cold history is not in ordinary model status');
@@ -493,7 +476,7 @@ try {
   await assert.rejects(() => call('mate_status', { id: 'inspect', offset: 1 }), /explicit attempt/);
   await commands['mate-complete'].handler('inspect', ctx);
   assert.match(notices.at(-1)[0], /awaits approval\/execution/, 'human completion still checks full scope history');
-  const approvalEvent = (await call('mate_status')).events.find(e => e.kind.startsWith('scope-approved-'));
+  const approvalEvent = (await call('mate_status')).events.find(e => e.kind.startsWith('scope-added-'));
   assert.ok(approvalEvent);
   await wait(() => messages.some(m => m.message.details?.events.some(e => e.id === approvalEvent.id)));
   assert.match(messages.at(-1).message.content, /call mate_continue in this turn/);
@@ -525,7 +508,7 @@ try {
   assert.equal(attached.action, 'transform');
   assert.ok(attached.text.startsWith(humanInput.text + '\n\n'));
   assert.match(attached.text, /not part of the human's request/);
-  assert.match(attached.text, /scope-approved-/);
+  assert.match(attached.text, /scope-added-/);
   assert.equal(attached.images, undefined, 'Pi preserves original images when omitted by the transform');
   assert.equal(messages.length, correctedCount, 'attachment itself starts no turn');
   supervisorIdle = false;

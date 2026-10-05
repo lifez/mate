@@ -40,7 +40,7 @@ class RemoteRuntimeTests(unittest.TestCase):
         self.role = self.home / "remote.json"
         self.role.write_text(json.dumps(self.binding)); self.role.chmod(0o600)
         self.methods = {name: getattr(mate, name) for name in
-                        ("propose", "approve", "propose_scope", "review_scope", "dispatch", "complete",
+                        ("propose", "approve", "extend_scope", "propose_scope", "review_scope", "dispatch", "complete",
                          "cancel", "close_tab", "return_lease")}
         self.methods["status"] = mate.snapshot
         self.remote = runtime.open_runtime(mate, self.db, self.methods)
@@ -128,6 +128,19 @@ class RemoteRuntimeTests(unittest.TestCase):
         self.assertEqual(shown["confirmation"], runtime.revision(self.binding, original))
         result = self.call("approve", dict(id="test", sha=shown["sha"], brief=shown["brief"]), shown["confirmation"])
         self.assertTrue(result["refused"], result)
+
+    def test_remote_supervisor_can_relay_chef_addition_without_parent_dialog(self):
+        self.remote.local("propose", self.params)
+        task = mate.load(self.db, "test")
+        task.update(state="review", attempt=1)
+        with self.db: mate.save(self.db, task)
+        (self.home / "test").mkdir()
+        result = self.call("extend_scope", dict(id="test", brief="Chef asks for another check"))
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn("pending_scope", result["result"])
+        history = mate.load(self.db, "test")["scope_history"]
+        self.assertEqual(history[-1]["approved_via"], "mate_extend")
+        self.assertEqual(history[-1]["first_attempt"], 2)
 
     def test_scope_addition_requires_current_parent_confirmation(self):
         proposed = self.remote.local("propose", self.params)

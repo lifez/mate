@@ -68,7 +68,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
   pi.on("before_agent_start", (event) => ({
-    systemPrompt: event.systemPrompt + "\n\nCurrent human-approved task scope (follow-ups cannot expand it):\n" + brief,
+    systemPrompt: event.systemPrompt + "\n\nCurrent task scope (including supervisor-relayed Chef additions; follow-ups cannot expand it):\n" + brief,
   }));
   pi.on("agent_start", (event, ctx) => {
     try { admit(ctx); send(event); }

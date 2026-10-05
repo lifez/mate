@@ -52,6 +52,50 @@ class MateTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    def test_supervisor_records_chef_additions_without_combined_limit(self):
+        task = self.propose()
+        task.update(state='review', attempt=1, approved_at=123, brief='x' * 19546)
+        (self.home / 'fix').mkdir()
+        with self.db:
+            m.save(self.db, task)
+        before = m.load(self.db, 'fix')
+        params = dict(id='fix', brief="Chef's intent: Fix gate blockers and update the existing PR." * 20)
+        added = m.extend_scope(self.db, params)
+        self.assertGreater(len(added['brief']), 20000)
+        self.assertNotIn('pending_scope', added)
+        self.assertEqual(added['original_brief'], before['brief'])
+        self.assertEqual(added['scope_history'][0]['first_attempt'], 2)
+        self.assertEqual(added['scope_history'][0]['approved_via'], 'mate_extend')
+        for key in ('state', 'attempt', 'sha', 'branch', 'approved_at'):
+            self.assertEqual(added[key], before[key])
+        self.assertEqual(m.extend_scope(self.db, params), added)
+        self.assertEqual(len(m.snapshot(self.db, {})['events']), 1)
+        with self.assertRaises(ValueError):
+            m.complete(self.db, dict(id='fix', attempt=1, scope_revision=1))
+        for brief in ('', 'bad\0text', 'x' * 20001):
+            with self.assertRaises(ValueError):
+                m.extend_scope(self.db, dict(id='fix', brief=brief))
+        guard = m.lock(self.home / 'fix' / 'run.lock')
+        try:
+            with self.assertRaises(BlockingIOError):
+                m.extend_scope(self.db, dict(id='fix', brief='Next request'))
+        finally:
+            guard.close()
+        self.assertEqual(m.load(self.db, 'fix'), added)
+        added['pending_scope'] = dict(token='legacy', brief='Not authorized')
+        with self.db:
+            m.save(self.db, added)
+        changed = m.extend_scope(self.db, dict(id='fix', brief='Current Chef request'))
+        self.assertNotIn('pending_scope', changed)
+        self.assertEqual(changed['scope_history'][-1]['superseded_pending_scope']['brief'], 'Not authorized')
+        self.assertNotIn('Not authorized', changed['brief'])
+        for state in ('running', 'attention', 'complete', 'cancelled', 'approved', 'awaiting-base'):
+            changed['state'] = state
+            with self.db:
+                m.save(self.db, changed)
+            with self.assertRaises(ValueError):
+                m.extend_scope(self.db, dict(id='fix', brief='Refuse'))
+
     def test_status_current_history_and_pinned_report_pages(self):
         task = self.propose()
         folder = self.home / task['id']
@@ -2119,7 +2163,7 @@ print('fixture-private-output')
         argv = json.loads((self.home / "argv.json").read_text())
         self.assertEqual(argv[argv.index("--model") + 1], "selected-model")
         self.assertEqual(argv[argv.index("--thinking") + 1], "high")
-        self.assertIn('Current human-approved scope', argv[-1])
+        self.assertIn('Current task scope', argv[-1])
         self.assertIn('Also check accessibility.', argv[-1])
         self.assertIn('Recheck the approved scope', argv[-1])
         self.assertEqual(argv[argv.index('--session') + 1], str(self.home / 'fix/session.jsonl'))

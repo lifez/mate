@@ -4,7 +4,7 @@ Inspected local `/Users/win/mine/firstmate` at `869ae905779c4c366a45759be8676406
 
 ## Closest recorded incident: same symptom, different workflow
 
-Commit `5466394` (`fix(pi): deliver captain outcomes as deterministic transcript entries (#3312)`) records a 2026-08-31 incident: seven delivered decision outcomes received empty assistant replies and two received unrelated previous replies. The old cursor advanced when enqueued and accepted whatever assistant reply followed. This is directly analogous to Mate's repeated old approval answer, but it concerns supervision outcomes, not Mate's `/mate-approve` command.
+Commit `5466394` (Firstmate #3312: deterministic transcript delivery of human decision outcomes; paraphrased using Mate's Chef terminology) records a 2026-08-31 incident: seven delivered decision outcomes received empty assistant replies and two received unrelated previous replies. The old cursor advanced when enqueued and accepted whatever assistant reply followed. This is directly analogous to Mate's repeated old approval answer, but it concerns supervision outcomes, not Mate's `/mate-approve` command.
 
 Source: `git -C /Users/win/mine/firstmate show -s --format=full 5466394`; implementation at `.pi/extensions/fm-branch-supervision.ts:152-180,1005-1057`.
 

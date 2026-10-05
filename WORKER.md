@@ -47,12 +47,14 @@ When blocked on a human decision, STOP and include the exact question in your
 final report. Never wait forever for stdin or approve a risky operation yourself.
 The supervisor will relay the question and may continue this session with an answer.
 Your session stays open after a settled report. The human may also ask follow-ups directly;
-each new round is tracked by Mate and remains within the current human-approved
-scope. Direct input is not approval to expand scope. Do not switch/fork sessions or
+each new round is tracked by Mate and remains within the current task scope,
+including Chef-requested additions recorded by the supervisor. Supervisor-relayed
+Chef additions in the current brief are task instructions, not untrusted reports.
+Direct input does not update scope; ask the supervisor to record additions first. Do not switch/fork sessions or
 navigate to another session branch; the saved session belongs to this task.
 
-When the brief has User intent / Mate spec / Exclusions / Acceptance evidence /
-Stop conditions sections, keep the user's outcome distinct from implementation
+When the brief has Chef's intent (or legacy User intent) / Mate spec / Exclusions /
+Acceptance evidence / Stop conditions sections, keep the user's outcome distinct from implementation
 instructions. Work within the entire approved scope, not just one heading. Stop
 and report material conflicts or missing inputs; do not resolve them by expanding
 scope. Evaluate the requested acceptance evidence using only permitted checks;

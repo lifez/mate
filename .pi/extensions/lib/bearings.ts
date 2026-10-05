@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const captainStates = new Set(["awaiting-base", "review", "failed", "attention"]);
+const chefStates = new Set(["awaiting-base", "review", "failed", "attention"]);
 const underwayStates = new Set(["acquiring", "launching", "running"]);
 
 const esc = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -42,11 +42,11 @@ function empty(text: string) {
 export function renderBearingsBoard(snapshot: any) {
   const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
   const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
-  const captain = tasks.filter((task: any) => task.scope_pending || captainStates.has(task.state));
+  const chef = tasks.filter((task: any) => task.scope_pending || chefStates.has(task.state));
   const landed = tasks.filter((task: any) => task.state === "complete").slice(0, 8);
   const underway = tasks.filter((task: any) => underwayStates.has(task.state));
   const charted = tasks.filter((task: any) => task.state === "approved" ||
-    (!captainStates.has(task.state) && !underwayStates.has(task.state) && !["complete", "cancelled"].includes(task.state)));
+    (!chefStates.has(task.state) && !underwayStates.has(task.state) && !["complete", "cancelled"].includes(task.state)));
   const eventRows = events.map((event: any) => `<article class="alert alert-warning alert-soft"><span><strong>${esc(event.task)}</strong> · ${esc(event.kind)} — ${esc(event.note)}</span></article>`).join("");
   const generated = new Date().toISOString();
   return `<!doctype html>
@@ -72,16 +72,16 @@ nav{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:2rem}.btn{appearance:non
 <header class="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
   <div><p class="mast text-xs font-bold uppercase text-primary">Mate · fleet snapshot</p><h1 class="mt-2 text-4xl font-black sm:text-6xl">Bearings</h1><p class="mt-2 opacity-65">Generated ${esc(generated)} · showing ${esc(tasks.length)} of ${esc(snapshot?.total_tasks ?? tasks.length)} retained tasks</p></div>
   <div class="stats stats-vertical bg-base-100 shadow sm:stats-horizontal">
-    <div class="stat"><div class="stat-title">Your call</div><div class="stat-value text-warning">${captain.length}</div></div>
+    <div class="stat"><div class="stat-title">Your call</div><div class="stat-value text-warning">${chef.length}</div></div>
     <div class="stat"><div class="stat-title">Underway</div><div class="stat-value text-info">${underway.length}</div></div>
     <div class="stat"><div class="stat-title">Pending events</div><div class="stat-value">${events.length}</div></div>
   </div>
 </header>
 <div role="alert" class="alert alert-info alert-soft mb-8"><span><strong>Read-only board.</strong> Buttons only copy a command. Paste it into the Mate TUI; approval, completion and cancellation still require their normal human confirmation.</span></div>
 <nav class="mb-8 flex flex-wrap gap-2" aria-label="Board sections">
-  <a class="btn btn-sm" href="#captains-call">Captain’s Call</a><a class="btn btn-sm" href="#landed">Recently Landed</a><a class="btn btn-sm" href="#underway">Underway</a><a class="btn btn-sm" href="#charted">Charted Next</a>
+  <a class="btn btn-sm" href="#chefs-call">Chef’s Call</a><a class="btn btn-sm" href="#landed">Recently Landed</a><a class="btn btn-sm" href="#underway">Underway</a><a class="btn btn-sm" href="#charted">Charted Next</a>
 </nav>
-<section id="captains-call" class="section mb-10"><h2 class="mb-4 text-2xl font-bold">Captain’s Call</h2><div class="grid gap-4 md:grid-cols-2">${captain.length ? captain.map((task: any) => card(task, "warning")).join("") : empty("Nothing needs your action right now.")}</div></section>
+<section id="chefs-call" class="section mb-10"><h2 class="mb-4 text-2xl font-bold">Chef’s Call</h2><div class="grid gap-4 md:grid-cols-2">${chef.length ? chef.map((task: any) => card(task, "warning")).join("") : empty("Nothing needs your action right now.")}</div></section>
 <section id="landed" class="section mb-10"><h2 class="mb-4 text-2xl font-bold">Recently Landed</h2><div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">${landed.length ? landed.map((task: any) => card(task, "success")).join("") : empty("No recent completions are in the current baseline.")}</div></section>
 <section id="underway" class="section mb-10"><h2 class="mb-4 text-2xl font-bold">Underway</h2><div class="grid gap-4 md:grid-cols-2">${underway.length ? underway.map((task: any) => card(task, "info")).join("") : empty("Nothing is underway.")}</div></section>
 <section id="charted" class="section mb-10"><h2 class="mb-4 text-2xl font-bold">Charted Next</h2><div class="grid gap-4 md:grid-cols-2">${charted.length ? charted.map((task: any) => card(task, "neutral")).join("") : empty("Nothing is queued.")}</div>${events.length ? `<h3 class="mb-3 mt-6 font-bold">Waiting for Mate handling</h3><div class="grid gap-3">${eventRows}</div>` : ""}</section>

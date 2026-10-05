@@ -1,6 +1,7 @@
 # Mate
 
-Personal supervisor built on **pi + Herdr + Treehouse**. Mate is its own runtime,
+Personal supervisor built on **pi + Herdr + Treehouse**. The human directing Mate
+is **Chef**; Mate supervises the team like a Michelin-star kitchen. Mate is its own runtime,
 not a Firstmate installation. Selected Firstmate code/patterns are tracked in
 [UPSTREAM.md](UPSTREAM.md) and [UPSTREAM.json](UPSTREAM.json).
 
@@ -113,7 +114,8 @@ worker slot, but its Treehouse lease remains held.
 The wrapper admits each new round under the task lock, checking the exact endpoint,
 lease, capacity and current approved scope before allowing work. Pending scope,
 completed tasks and uncertain ownership refuse input. Typing directly does not
-approve additional scope: use `mate_extend` and `/mate-approve` as before. Session
+record additional scope: ask the supervisor to use `mate_extend`, then `mate_continue`.
+No additional approval dialog is needed. Session
 switch/fork/tree navigation and untracked `!`/`!!` shell commands are blocked in a
 worker; use another shell for unrelated work. Normal Pi `/reload` retains the bridge.
 
@@ -164,7 +166,7 @@ Plain `claude` in this repository is a normal coding session: nothing loads Mate
 
 ## Task briefs
 
-New proposals and scope additions use five concise sections: **User intent**
+New proposals and scope additions use five concise sections: **Chef's intent**
 (the user's actual outcome and context), **Mate spec** (minimum work/deliverable),
 **Exclusions**, **Acceptance evidence** (permitted checks and expected results),
 and **Stop conditions** (missing inputs/conflicts requiring a human answer).
@@ -185,7 +187,7 @@ the current scope. After approval, `mate_propose` cannot change the scope.
 
 ## Commands
 
-- `/mate-approve ID [ID ...]` — human-only per-task scope/base approval, or accept/decline a pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may explicitly name a local target branch for safe fast-forward delivery; GitHub/remote PR merge and deploy are never included.
+- `/mate-approve ID [ID ...]` — human-only initial scope/base approval, or accept/decline a legacy pending scope addition; push/PR are authorized only when the approved scope explicitly requests a PR. Local merges into the assigned task branch are allowed when required by scope. Scope may explicitly name a local target branch for safe fast-forward delivery; GitHub/remote PR merge and deploy are never included.
 - `/mate-status` — show open tasks and pending events without invoking a model.
 - `/mate-remote` — list configured remote routes. `/mate-remote ROUTE status [ID]` inspects a remote home; `approve ID`, `complete ID [--force]`, `close ID`, `return ID`, and `cancel ID` each use primary-human confirmation. `pending`, `result REQUEST_UUID`, and `reconnect` inspect/recover local transport only, never relaunch remote work. `doctor` checks prerequisites; `start` and `recover` launch only after human confirmation. Verified with disposable real-SSH lifecycle tests; production setup remains explicit.
 - `/mate-list` — show only the ID and state of each open task.
@@ -204,7 +206,7 @@ acknowledges, dispatches, approves, completes or changes task records.
 
 `/bearings lavish` uses the same bounded local status snapshot as `/mate-status` and
 writes `MATE_HOME/.lavish/bearings-board.html` atomically with private permissions.
-Its four sections are Captain's Call, Recently Landed, Underway and Charted Next.
+Its four sections are Chef's Call, Recently Landed, Underway and Charted Next.
 Board buttons only copy the appropriate Mate command; they never execute, approve,
 acknowledge, dispatch, complete, cancel or alter a repository. Paste copied commands
 back into the Mate TUI, where the existing human dialogs and runtime checks still
@@ -269,34 +271,32 @@ No task-state migration is required; old single-tab tasks retain their behavior.
 
 ## Additional scope in the same worktree
 
-For an **idle or stopped `review`/`failed` task**, ask Mate to add work to the existing task.
-Mate records `mate_extend {id, brief}` with only the proposed addition; the approved
-brief and worker settings stay unchanged. Then run `/mate-approve ID` to review the
-current scope, addition, repository, pinned base, branch and existing worktree.
+For an **idle or stopped `review`/`failed` task**, Chef can ask the supervisor to
+add or change work. The trusted supervisor records only that added request with
+`mate_extend {id, brief}`, preserving Chef's words separately from implementation
+instructions. **No additional `/mate-approve` is needed.** Material ambiguity still
+requires a Chef answer; worker reports do not authorize scope expansion.
 
-- Accepting appends the addition to the approved brief and saves its approval time,
-  local OS account, proposal token and first eligible attempt in `scope_history`.
-  `original_brief` and the original base approval remain intact. No worker starts.
-- Declining discards only that pending addition. While pending, continuation and
-  completion are blocked. Repeating the same pending brief is a no-op; a different
-  brief replaces it. Stale tokens/attempts/base confirmations and live worker locks
-  are refused. Combined approved scope is limited to 20,000 characters.
-- After approval, Mate uses **`mate_continue`**, never a new dispatch. The existing
-  endpoint/lease and capacity checks still apply. Worktree, dirty files, commits,
-  lease, branch, base, Pi session, reports, events and saved model/effort are retained;
-  there is no reset, rebase, reacquisition or startup rerun. Explicit model/effort
-  overrides still work. Every subsequent worker prompt includes the updated scope.
-- Approval creates a durable wake event, replayed after restart until acknowledged.
-  Inspect the current task with `mate_status`; old reports remain evidence for their
-  original attempts. Completion requires a new reviewed run covering the addition,
-  not merely acceptance of the old report; stale scope confirmations are refused.
-- `complete`, active and `attention` tasks cannot be extended. Approval authorizes
-  push/PR only when the approved scope explicitly requests a PR. Local merges into the
-  assigned task branch are allowed when required by scope. An addition may explicitly
-  name a local target branch for fast-forward-only delivery from the assigned task
-  branch; it never authorizes a GitHub/remote PR merge, deploy or reopening completed
-  tasks. Scope compliance remains an instruction to trusted workers, not semantic
-  enforcement of arbitrary continuation messages.
+- The addition is appended immediately. `scope_history` records its text, token,
+  timestamp, supervisor authority and first eligible attempt. `original_brief`
+  and the initial base approval remain intact. No worker starts.
+- Each addition is limited to 20,000 characters; there is no 20,000-character
+  accumulated-scope gate. Repeating the latest identical addition is a no-op.
+  The complete brief still consumes model context and transport capacity.
+- Mate then uses **`mate_continue`**, never a new dispatch. Exact endpoint/lease,
+  worker lock and capacity checks remain. Worktree, edits, commits, branch, base,
+  session, settings and reports stay intact; no reset, repinning or startup rerun.
+- A durable `scope-added` wake survives restart until acknowledged. Old reports
+  cover their old attempts; completion requires a new reviewed run of the addition.
+  Acknowledgement means the event was handled, not that work passed.
+- This adopts Firstmate's trusted-supervisor authority, not its terminal steering
+  transport. Active workers must settle before an addition is recorded/delivered;
+  `attention` and completed tasks remain refused. No mid-run inbox is introduced.
+- Legacy pending proposals remain readable/reviewable. Recording a current Chef
+  request explicitly supersedes and archives the old pending proposal, without
+  silently adding its text. Initial approval and completion stay human-only.
+- Push/PR requires an explicit request in current scope. Local target delivery
+  remains clean fast-forward-only; remote PR merge and deploy remain prohibited.
 
 After installing the change, reload/restart the supervisor **with workers stopped**
 to load both the new tool and control plane. Existing tasks need no database migration;

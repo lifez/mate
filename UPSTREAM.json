@@ -2,6 +2,12 @@
   "version": 1,
   "repository": "https://github.com/kunchenguid/firstmate",
   "update_policy": "selective-port; never merge or pull upstream over Mate",
+  "local_scope_followup": {
+    "reference_commit": "f470a01c",
+    "sources": ["AGENTS.md", "bin/fm-task-inbox-lib.sh"],
+    "mode": "reference-only",
+    "description": "Chef vocabulary and trusted-supervisor immediate scope additions through extend_scope for Pi/Claude/local/remote. Per-addition bound, no combined 20000-character gate; preserve original approval, scope history, durable events, legacy proposal compatibility and reviewed-run completion. Stopped rounds only; no Firstmate terminal inbox code copied or component baseline advanced."
+  },
   "components": [
     {
       "id": "R01",

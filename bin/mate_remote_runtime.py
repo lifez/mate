@@ -17,7 +17,7 @@ import mate_remote_events as notifications
 from mate_remote_transport import settings
 
 HUMAN = frozenset({"approve", "review_scope", "complete", "cancel", "close_tab", "return_lease"})
-PARENT_METHODS = HUMAN | {"propose", "propose_scope", "status", "dispatch", "resume",
+PARENT_METHODS = HUMAN | {"propose", "extend_scope", "propose_scope", "status", "dispatch", "resume",
                           "inspect_cancel", "inspect_return_lease", "ack"}
 
 

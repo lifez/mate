@@ -169,8 +169,10 @@ with tempfile.TemporaryDirectory(prefix='mate-tui-') as temporary:
         os.write(terminal, b'Do the pending addition now.\r')
         wait(lambda: b'Additional scope awaits' in output)
         assert len(Model.requests) == requests and reviewed(2), 'pending scope gates direct input too'
-        mate.review_scope(db, dict(id='fixture', attempt=2, sha='fixture-sha', token=pending['token'], approve=True))
-        mate.resume(db, dict(id='fixture', message='Explain the newly approved marker.', effort='off'))
+        # Chef's explicit request supersedes the legacy pending proposal, no scope dialog.
+        added = mate.extend_scope(db, dict(id='fixture', brief='Also explain the marker.'))
+        assert 'pending_scope' not in added and added['scope_history'][-1]['approved_via'] == 'mate_extend'
+        mate.resume(db, dict(id='fixture', message="Explain Chef's added marker.", effort='off'))
         wait(lambda: reviewed(3))
         assert os.waitpid(pid, os.WNOHANG)[0] == 0
         assert 'Also explain the marker.' in json.dumps(Model.requests[-1]), 'updated scope reaches the resident Pi'
@@ -193,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='mate-tui-') as temporary:
         assert mate.load(db, 'fixture')['state'] == 'complete'
         assert not mate.resident_alive(mate.load(db, 'fixture'))
         assert len([e for e in mate.snapshot(db, {})['events'] if e['kind'] == 'report']) == 3
-        print('PASS: persistent real Pi, native + supervisor continuation, scope/stale gates, per-round reports/usage, human completion exits; localhost model only')
+        print('PASS: persistent real Pi, native + supervisor continuation, Chef additions without scope approval, legacy/stale gates, per-round reports/usage, human completion exits; localhost model only')
     except BaseException:
         import traceback
         traceback.print_exc()
