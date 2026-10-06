@@ -478,6 +478,10 @@ hash เปลี่ยนไม่ได้หมายถึง upstream เ�
   prototype patches, thinking suppression, boat animation และ export interception
 - ไม่เปลี่ยน model context/raw messages, execution, delivery หรือ ack; rendered exports
   อาจสะท้อน Calm จึงใช้ `/calm off` ก่อน export/share แบบเต็ม
+- Local adaptation: native `MATE EVENT`/human runtime attachments use the installed
+  public Markdown transformer for compact presentation; tool expansion restores full
+  instructions. Folded `mate_status` omits repo/base/branch/brief, retaining reports
+  and errors. Native delivery/model content/ack and provenance baselines unchanged.
 - Dependencies: Node stdlib, installed Pi ExtensionAPI และ pi-tui Text
 - Tests: `tests/extension-check.mjs` — persistence/restart, toggle existing rows,
   routine hiding, retained failures/reports/approval, payload preservation และ wake replay

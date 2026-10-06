@@ -409,8 +409,12 @@ Propose a new task if needed.
 Run `/calm on` to hide completed routine dispatch/continue, acknowledgement and
 uneventful status rows, plus redundant approval notifications. Report-only wake
 historical custom messages become a short **report ready (not verified)** notice.
-New runtime wakes are native user messages for remote-compaction compatibility;
-they remain visible in Calm mode and are explicitly marked as runtime input.
+New runtime wakes remain native user messages for remote-compaction compatibility,
+but display only event IDs, task IDs and kinds by default, even with Calm off.
+`mate_status` shows compact state/attempt rows without repo/base/branch/brief details.
+Use Pi's tool expansion control to reveal runtime instructions and detailed status;
+reports and errors stay visible when folded. Human text preceding a runtime attachment
+is preserved. Unknown or malformed wakes stay fully visible.
 Report contents,
 blockers, failures, pending calls and human approval dialogs remain visible.
 Unknown results stay visible rather than being silently classified as routine.
@@ -422,8 +426,8 @@ auto-wake delivery and acknowledgement behavior are unchanged.
 
 This is scoped to Mate's own tool/message rendering—not Firstmate's full UI:
 no thinking suppression, global tool patches or boat animation. Hidden custom
-messages may leave a blank spacer. Use `/calm off` before `/export` or `/share`
-if you want full rendered orchestration history; raw session content is retained.
+messages may leave a blank spacer. Use `/calm off` and expand tools for full
+interactive orchestration details; raw session content is always retained.
 
 ## Stow: memory across supervisor sessions
 

@@ -16,18 +16,18 @@ function resultData(result: Output): any {
   catch { return undefined; }
 }
 
-export function statusPreview(data: any): string | undefined {
+export function statusPreview(data: any, compact = false): string | undefined {
   if (!data || typeof data !== "object") return;
   const tasks = Array.isArray(data.tasks) ? data.tasks : [];
   const events = Array.isArray(data.events) ? data.events : [];
   const lines = [];
   if (Number.isInteger(data.total_tasks)) lines.push(`${data.total_tasks} tasks · ${data.open_tasks ?? "?"} open · ${events.length} pending`);
-  const detailed = tasks.length === 1 && tasks.some((task: any) => task?.repo || task?.brief);
+  const detailed = !compact && tasks.length === 1 && tasks.some((task: any) => task?.repo || task?.brief);
   for (const task of tasks) {
     if (!task || typeof task !== "object") continue;
     const heading = `[${String(task.state ?? "unknown").toUpperCase()}] ${task.id ?? "unknown"}${Number.isInteger(task.attempt) ? ` · attempt ${task.attempt}` : ""}`;
     if (!detailed) {
-      lines.push(heading + (task.base ? ` · ${task.base}` : "") + (task.model ? ` · ${task.model}` : ""));
+      lines.push(heading + (!compact && task.base ? ` · ${task.base}` : "") + (!compact && task.model ? ` · ${task.model}` : ""));
       if (task.error) lines.push(`  error   ${task.error}`);
       continue;
     }
@@ -70,6 +70,23 @@ export function createCalm(pi: ExtensionAPI, root: string) {
     catch { return false; }
   };
   let active = load();
+  let toolsExpanded = () => false;
+  pi.registerMarkdownTransformer((markdown, context) => {
+    if (context.messageType !== "user" || toolsExpanded()) return markdown;
+    const attachment = "\n\n--- Mate runtime attachment (not part of the human's request) ---\n";
+    const index = markdown.indexOf(attachment);
+    const prefix = index < 0 ? "" : markdown.slice(0, index) + "\n\n";
+    const wake = index < 0 ? markdown : markdown.slice(index + attachment.length);
+    const marker = "MATE EVENT (runtime processing request, not typed by the human and not a new approval): ";
+    if (!wake.startsWith(marker)) return markdown;
+    try {
+      const events = JSON.parse(wake.slice(marker.length).split("\n")[0]);
+      if (!Array.isArray(events) || !events.length || events.some(event =>
+        !event || !Number.isInteger(event.id) || typeof event.task !== "string" || typeof event.kind !== "string")) return markdown;
+      return prefix + "Mate · " + events.map(event => `#${event.id} ${event.task} · ${event.kind}`).join("\nMate · ") +
+        "\n(expand tools for runtime details)";
+    } catch { return markdown; } // Unknown/malformed runtime input stays visible.
+  });
   const persist = (enabled: boolean) => {
     mkdirSync(dirname(preference), { recursive: true, mode: 0o700 });
     const temporary = `${preference}.${process.pid}.${randomUUID()}.tmp`;
@@ -117,7 +134,7 @@ export function createCalm(pi: ExtensionAPI, root: string) {
     }));
 
   return {
-    sync(ctx: ExtensionContext) { active = load(); status(ctx); },
+    sync(ctx: ExtensionContext) { active = load(); toolsExpanded = () => ctx.ui.getToolsExpanded(); status(ctx); },
     tool<T extends ToolDefinition<any, any, any>>(definition: T): T {
       return { ...definition, renderShell: "self",
         renderCall(args, theme, context) {
@@ -135,7 +152,7 @@ export function createCalm(pi: ExtensionAPI, root: string) {
           const text = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
           const lines = text.split("\n");
           const data = resultData(result);
-          const summary = definition.name === "mate_status" ? statusPreview(data) :
+          const summary = definition.name === "mate_status" ? statusPreview(data, !options.expanded) :
             data?.id && data?.state ? statusPreview({ tasks: [data], events: [] }) : undefined;
           const preview = summary ?? (options.expanded || lines.length <= 10 ? text : lines.slice(0, 10).join("\n") + `\n… ${lines.length - 10} more lines (expand tool output)`);
           const color = context.isError ? "error" : definition.name.startsWith("mate_") ? "text" : "toolOutput";

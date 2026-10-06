@@ -453,7 +453,7 @@
     },
     {
       "component_ids": ["R02", "R07"],
-      "description": "Wire focused Calm renderers into Mate tools and add wake event details without changing model content, delivery or acknowledgement. Preserve previous initial snapshots.",
+      "description": "Wire focused Calm renderers into Mate tools and add wake event details without changing model content, delivery or acknowledgement. Local presentation adaptation: use installed public Markdown transformer to compact native MATE EVENT and human runtime attachments, reveal full instructions via tool expansion, and fold mate_status identity/scope details while retaining errors/reports. Preserve previous initial snapshots.",
       "paths": [".pi/extensions/mate-supervisor.ts", ".pi/extensions/lib/calm.ts"],
       "local_commit": null
     },

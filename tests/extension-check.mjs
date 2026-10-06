@@ -48,7 +48,7 @@ process.env.PATH = `${fakebin}:${originalPath}`;
 const repo = join(tmp, 'repo'); mkdirSync(repo);
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 git('init', '-b', 'main'); git('-c', 'user.name=Mate Test', '-c', 'user.email=mate@test.invalid', 'commit', '--allow-empty', '-m', 'base');
-const handlers = {}, tools = {}, commands = {}, renderers = {}, messages = [], notices = [], statuses = {};
+const handlers = {}, tools = {}, commands = {}, renderers = {}, messages = [], notices = [], statuses = {}, markdownTransformers = [];
 let active = ['read', 'write', 'bash', 'external_tool'], approval = false, closeApproval = false, releaseApproval = false, expanded = false;
 const models = [
   { provider: 'openai-codex', id: 'main-model', reasoning: true },
@@ -66,6 +66,7 @@ const pi = {
   registerTool(tool) { tools[tool.name] = tool; },
   registerCommand(name, command) { commands[name] = command; },
   registerMessageRenderer(name, renderer) { renderers[name] = renderer; },
+  registerMarkdownTransformer(transformer) { markdownTransformers.push(transformer); },
   setActiveTools(names) { active = names; },
   sendMessage(message, options) {
     assert.ok(!['mate-wake', 'mate-watch-error'].includes(message.customType), 'operational wakes must not use custom messages');
@@ -305,8 +306,31 @@ try {
   ] });
   assert.equal(listPreview.split('\n').length, 3, 'task lists stay one line per task');
   assert.match(statusPreview({ report_attempt: 2, report: { text: 'result\ncheck', more: false } }), /report · attempt 2\nresult\ncheck/);
+  const transform = markdownTransformers[0];
+  const nativeWake = 'MATE EVENT (runtime processing request, not typed by the human and not a new approval): ' +
+    JSON.stringify([{ id: 631, task: 'inspect', kind: 'base-approved' }]) + '\nINTERNAL_RUNTIME_RULES';
+  const compactWake = transform(nativeWake, { messageType: 'user' });
+  assert.match(compactWake, /Mate · #631 inspect · base-approved/);
+  assert.doesNotMatch(compactWake, /INTERNAL_RUNTIME_RULES|MATE EVENT/);
+  assert.equal(transform(nativeWake, { messageType: 'assistant' }), nativeWake);
+  assert.equal(transform('Human asks a question', { messageType: 'user' }), 'Human asks a question');
+  assert.equal(transform(nativeWake.replace('[{', '{'), { messageType: 'user' }), nativeWake.replace('[{', '{'));
+  const attachedWake = 'Human asks a question\n\n--- Mate runtime attachment (not part of the human\'s request) ---\n' + nativeWake;
+  assert.equal(transform(attachedWake, { messageType: 'user' }), 'Human asks a question\n\n' + compactWake);
+  expanded = true;
+  assert.equal(transform(nativeWake, { messageType: 'user' }), nativeWake, 'expansion restores raw runtime input');
+  expanded = false;
   const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
   const output = data => ({ content: [{ type: 'text', text: JSON.stringify(data) }] });
+  const foldedStatus = tools.mate_status.renderResult(output({ tasks: [{ id: 'inspect', state: 'attention', attempt: 1,
+    repo: '/repo', base: 'main', branch: 'mate/inspect', brief: 'INTERNAL_BRIEF', error: 'uncertain launch' }], events: [] }),
+    { expanded: false, isPartial: false }, theme, { state: {}, isError: false }).render(100).join('\n');
+  assert.match(foldedStatus, /\[ATTENTION\] inspect · attempt 1/);
+  assert.match(foldedStatus, /uncertain launch/);
+  assert.doesNotMatch(foldedStatus, /INTERNAL_BRIEF|\/repo|mate\/inspect/);
+  const foldedReport = tools.mate_status.renderResult(output({ tasks: [], events: [], report: { text: 'Report evidence' } }),
+    { expanded: false, isPartial: false }, theme, { state: {}, isError: false }).render(100).join('\n');
+  assert.match(foldedReport, /Report evidence/, 'report evidence stays visible when folded');
   const statusColors = [], statusBackgrounds = [];
   const statusResult = tools.mate_status.renderResult(output({ total_tasks: 1, open_tasks: 1, tasks: [{ id: 'inspect', state: 'review', repo: '/repo', brief: 'Readable' }], events: [] }),
     { expanded: true, isPartial: false }, {
