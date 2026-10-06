@@ -223,7 +223,8 @@ Mate does not disable their own startup hooks or background behavior. Only load
 global extensions you trust to coexist with the supervisor.
 
 `mate_continue` continues an **idle or stopped** review/failed worker in the same
-worktree and Pi session, for the same approved scope. An idle resident Pi receives
+worktree and saved harness session, for the same approved scope. Claude workers restart
+with `--resume`; the private input behavior below applies to Pi. An idle resident Pi receives
 one native user message over its private, generation/attempt-fenced control socket;
 Mate never types terminal keys into it. Model/effort overrides apply to that same Pi.
 A lost control reply leaves uncertain work for inspection, never automatic retry. It also supports the narrowly inspected
@@ -481,6 +482,7 @@ Edit `mate.config.json` in the Mate repository (not the worker's repository):
 ```json
 {
   "worker": {
+    "harness": "pi",
     "model": "openai-codex/gpt-5.6-luna",
     "effort": "xhigh",
     "max_active": 2,
@@ -499,31 +501,47 @@ works across repositories and retains Herdr tabs inside the task workspace; it i
 a native Git-worktree group. `same_tab_as` remains the explicit per-task override.
 Optional natural-language `dispatch.rules` live in this same file—Mate does not create
 or read a separate `crew-dispatch.json`. The supervisor chooses the best semantic match
-and records its concrete model/effort in the brief before approval; an unmatched task
-uses the `worker` profile. When rules are active, initial dispatch requires both selected
-fields so consultation cannot be silently skipped. Human-requested settings take
-precedence. Profile arrays, harness switching and quota balancing are not supported;
-Mate always launches Pi. See [CONFIGURATION.md](CONFIGURATION.md#dispatch-rules).
+and records its concrete harness/model/effort in the brief before approval; an unmatched
+task uses the `worker` profile. When rules are active, initial dispatch requires explicit
+model and effort, plus harness when rules use more than one, so consultation cannot be
+silently skipped. Human-requested settings take precedence. Profile arrays and quota
+balancing are not supported. See [CONFIGURATION.md](CONFIGURATION.md#dispatch-rules).
 
-Precedence per model/effort field is **human override → matching dispatch rule → worker config → supervisor setting**.
-Use `provider/model-id` to keep the default independent of the supervisor's provider.
-A bare ID uses the supervisor's provider. Use `{}` to inherit both supervisor settings.
+`worker.harness` selects `pi` (default) or `claude`, independently of the supervisor.
+Per-task `mate_dispatch` overrides it; a task keeps its harness for life, so continuation
+cannot switch it. For example, a Pi supervisor can dispatch a Claude Code worker:
+
+```json
+{"id":"login-fix","harness":"claude","model":"opus","effort":"high"}
+```
+
+Claude models are `claude --model` values, validated by Claude at launch, not Pi's registry.
+Claude effort supports `low`, `medium`, `high`, `xhigh`, `max` and defaults to `high`.
+Pi defaults do not apply to Claude workers. See [worker harness](CONFIGURATION.md#worker-harness)
+for authentication, permissions and saved-session continuation behavior.
+
+Model/effort precedence is **human override → matching dispatch rule → worker config → supervisor setting**,
+using defaults only for the selected harness. For Pi, use `provider/model-id` to keep
+the default independent of the supervisor's provider. A bare ID uses the Pi supervisor's
+provider; a Claude supervisor needs `provider/model-id` for Pi workers. Use `{}` to
+inherit Pi supervisor settings with the default Pi harness.
 Missing/unreadable/invalid config fails dispatch instead of silently falling back.
-Unknown models or unsupported configured effort also fail before worker launch;
-when overriding to a model without `xhigh`, explicitly override effort too.
+Unknown Pi models or unsupported configured effort also fail before worker launch;
+when overriding to a Pi model without `xhigh`, explicitly override effort too.
 
 This file is local-only and Git-ignored; share `mate.config.example.json` instead.
-Keep credentials out of both files; authentication still comes from pi. Config changes do not alter existing tasks or continuation:
-those retain their saved profiles unless explicitly overridden.
+Keep credentials out of both files; authentication comes from the selected harness
+(`pi` or `claude`), not Mate. Config changes do not alter existing tasks or continuation:
+those retain their saved profiles unless model/effort is explicitly overridden.
 
 Ask naturally, for example: “Delegate this with model `<model-id>` and effort `high`.”
-The supervisor passes optional `model` and `effort` to `mate_dispatch`:
+The supervisor passes optional `harness`, `model` and `effort` to `mate_dispatch`:
 
 ```json
 {"id":"login-fix","model":"openai-codex/<model-id>","effort":"high"}
 ```
 
-Replace `<model-id>` with an exact ID from pi's `/model` picker. A bare ID uses the
+The following model/effort details apply to Pi workers. Replace `<model-id>` with an exact ID from pi's `/model` picker. A bare ID uses the
 supervisor's provider; `provider/model-id` explicitly selects another provider.
 Selecting another provider may require separate credentials/billing—it does not
 make that provider part of your OpenAI subscription.
@@ -629,8 +647,9 @@ stopped; subsequent project config edits are read without restarting.
 
 ## Per-task usage and estimated cost
 
-Worker usage is persisted in the task journal after each finalized assistant message,
-including tool-calling turns and errors with reported usage. Streaming updates are
+Pi worker usage is persisted in the task journal after each finalized assistant message,
+including tool-calling turns and errors with reported usage. Claude worker tokens are
+read from its transcript at Stop/StopFailure; Claude reports no cost. Streaming updates are
 not counted repeatedly. Each attempt has separate counters; continuation adds a new
 attempt rather than counting the saved session history again.
 
@@ -675,7 +694,7 @@ attempt rather than counting the saved session history again.
   changes, not filesystem/network permissions. The worker's scope-limited push and
   no-deploy rules are instructions, not an OS-enforced security boundary. Approve only repositories
   and briefs you trust; Treehouse may run repository setup hooks.
-- Workers load global and worktree-project skills/extensions using normal Pi discovery
+- Pi workers load global and worktree-project skills/extensions using normal Pi discovery
   and configured resource filters, plus the explicit Mate event bridge. Worker launches
   use `--approve` to trust project resources for that run (including project settings,
   packages and executable extensions); approve only repositories/resources you trust.
